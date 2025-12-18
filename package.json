@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "lessonbay-backend",
   "version": "1.0.0",
   "description": "LessonBay Backend - Email OTP",
@@ -13,3 +13,4 @@
     "cors": "^2.8.5"
   }
 }
+

@@ -1,5 +1,5 @@
-﻿/* ============================
-   LiveClass (Static + localStorage) — v12 FIXED (NO-REDUCE)
+﻿﻿/* ============================
+   LessonBay (Static + localStorage) — v12 FIXED (NO-REDUCE)
    - ✅ Enrollment/Enter/Replay gating 안정화 + UI 반영
      1) enrollment를 ""(빈키)로 저장하지 않음 (읽기는 레거시 호환)
      2) 수강완료 즉시 상세페이지 버튼/문구 갱신(수강중/만료/재수강)
@@ -311,10 +311,10 @@ try {
   }
 } catch(_) {}
 
-const OLD_USER_KEYS = ["currentUser", "liveclass_currentUser", "user", "authUser"];
-const OLD_USERS_KEYS = ["users", "liveclass_users"];
-const OLD_CLASSES_KEYS = ["classes", "liveclass_classes", "classData"];
-const OLD_ENROLL_KEYS = ["enrollments", "liveclass_enrollments"];
+const OLD_USER_KEYS = ["currentUser", "LessonBay_currentUser", "user", "authUser"];
+const OLD_USERS_KEYS = ["users", "LessonBay_users"];
+const OLD_CLASSES_KEYS = ["classes", "LessonBay_classes", "classData"];
+const OLD_ENROLL_KEYS = ["enrollments", "LessonBay_enrollments"];
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
@@ -697,6 +697,7 @@ function buildNavLinks() {
     <a class="nav-link" href="index.html">홈</a>
     <a class="nav-link" href="classes.html">수업 목록</a>
     ${isTeacher ? `<a class="nav-link" href="create_class.html">수업 생성</a>` : ``}
+    ${user ? `<a class="nav-link" href="settings.html">설정</a>` : ``}
   `;
 }
 
@@ -1016,6 +1017,100 @@ function handleLoginPage() {
       if (!ok) alert("이메일 또는 비밀번호가 올바르지 않습니다.");
     });
   }
+}
+
+// ---------------------------
+// ✅ SETTINGS (계정 삭제)
+// ---------------------------
+function removeUserData(u) {
+  if (!u) return;
+
+  // 1) users 목록에서 제거
+  const users = getUsers().filter(x => normalizeEmail(x.email) !== normalizeEmail(u.email));
+  setUsers(users);
+
+  // 2) enrollments에서 해당 유저 키들 제거
+  const enroll = getEnrollments();
+  const keys = userKeyList(u, true);
+  keys.forEach(k => { if (enroll[k]) delete enroll[k]; });
+  setEnrollments(enroll);
+
+  // 3) 채팅에서 해당 이메일 메시지 제거
+  const chat = getChat();
+  const emailKey = normalizeEmail(u.email);
+  Object.keys(chat || {}).forEach(cid => {
+    chat[cid] = (chat[cid] || []).filter(m => m.emailKey !== emailKey);
+  });
+  setChat(chat);
+
+  // 4) 선생님이면 본인 수업/재생 목록 삭제
+  if (u.role === "teacher") {
+    const classes = getClasses();
+    const myClasses = classes.filter(c => c.teacher === u.name).map(c => c.id);
+    const rest = classes.filter(c => c.teacher !== u.name);
+    setClasses(rest);
+
+    // 해당 수업의 replays 제거
+    const rp = getReplays();
+    myClasses.forEach(id => { if (rp[id]) delete rp[id]; });
+    setReplays(rp);
+
+    // 해당 수업의 enrollments 제거
+    const en2 = getEnrollments();
+    Object.keys(en2 || {}).forEach(uid => {
+      myClasses.forEach(cid => { if (en2[uid] && en2[uid][cid]) delete en2[uid][cid]; });
+    });
+    setEnrollments(en2);
+  }
+
+  // 5) 현재 사용자 로그아웃
+  setUser(null);
+  clearOldAuthKeys();
+}
+
+function handleSettingsPage() {
+  const root = $("#settingsRoot");
+  if (!root) return;
+
+  const user = getUser();
+  if (!user) { location.href = "login.html"; return; }
+
+  const info = $("#settingsInfo");
+  if (info) {
+    info.innerHTML = `
+      <div class="card pad" style="margin-top:12px;">
+        <div><strong>이름:</strong> ${escapeHtml(user.name || "")}</div>
+        <div><strong>이메일:</strong> ${escapeHtml(user.email || "")}</div>
+        <div><strong>역할:</strong> ${escapeHtml(user.role || "")}</div>
+      </div>
+    `;
+  }
+
+  const delBtn = $("#settingsDeleteBtn");
+  const pwInput = $("#settingsPw");
+  const msg = $("#settingsMsg");
+
+  delBtn?.addEventListener("click", () => {
+    const pw = (pwInput?.value || "").trim();
+    normalizeUsersInStorage();
+    const users = getUsers();
+    const me = users.find(x => normalizeEmail(x.email) === normalizeEmail(user.email)) || null;
+    if (!me) {
+      msg.textContent = "계정을 찾을 수 없습니다.";
+      return;
+    }
+    const realPw = getUserPassword(me);
+    if (String(pw) !== String(realPw)) {
+      msg.textContent = "비밀번호가 일치하지 않습니다.";
+      return;
+    }
+
+    if (!confirm("정말로 계정을 삭제하시겠습니까?")) return;
+
+    removeUserData(user);
+    alert("계정을 삭제했습니다.");
+    location.href = "signup.html";
+  });
 }
 
 /* ============================
@@ -1705,7 +1800,7 @@ function renderReplaysList(classId) {
           // 제목
           ctx.fillStyle = "rgba(15,23,42,.85)";
           ctx.font = "700 48px system-ui, -apple-system, Segoe UI, Roboto";
-          ctx.fillText("LiveClass VOD Demo", 70, 110);
+          ctx.fillText("LessonBay VOD Demo", 70, 110);
           ctx.font = "500 28px system-ui, -apple-system, Segoe UI, Roboto";
           ctx.fillStyle = "rgba(15,23,42,.65)";
           ctx.fillText("녹화/다시보기 동작 확인용 샘플", 70, 160);
@@ -2363,6 +2458,7 @@ function init() {
     if ($("#createClassForm")) handleCreateClassPage();
     if ($("#loginForm")) handleLoginPage();
     if ($("#signupForm")) handleSignupPage();
+    if ($("#settingsRoot")) handleSettingsPage();
     if ($("#teacherDash")) loadTeacherDashboard();
     if ($("#studentDash")) loadStudentDashboard();
     if ($("#liveRoot")) loadLivePage();
