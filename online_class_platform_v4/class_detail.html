@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LiveClass - 수업 상세</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <nav>
+    <div class="container nav-inner">
+      <a class="logo" href="index.html"><span class="logo-dot"></span>LiveClass</a>
+      <div id="navLinks"></div>
+      <div id="navRight"></div>
+    </div>
+  </nav>
+
+  <section class="section">
+    <div class="container" id="detailRoot">
+      <div class="detail-wrap" data-reveal>
+        <div class="card pad-lg">
+          <img id="detailImg" class="detail-img" alt="수업 이미지" />
+          <div style="margin-top:14px;">
+            <div id="detailTitle" class="h2"></div>
+            <div class="muted" style="margin-top:6px;">
+              선생님 · <span id="detailTeacher"></span> · <span id="detailCategory"></span>
+            </div>
+            <div id="detailDesc" class="p"></div>
+
+            <div class="kv">
+              <div class="item">
+                <div class="k">주 결제</div>
+                <div class="v" id="detailWeekly"></div>
+              </div>
+              <div class="item">
+                <div class="k">월 결제</div>
+                <div class="v" id="detailMonthly"></div>
+              </div>
+            </div>
+
+            <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+              <button class="btn primary" id="goLiveBtn">라이브 입장</button>
+              <a class="btn" href="#sessions">지난 수업</a>
+            </div>
+
+            <div class="muted" id="enrollStateText" style="margin-top:10px; font-size:13px;"></div>
+          </div>
+        </div>
+
+        <div class="card pad-lg" id="purchase" data-reveal>
+          <div class="h2">수강 / 입장 🚀</div>
+          <div class="muted" style="margin-top:6px;">주/월 결제 선택 → 기간 선택 → 금액/종료일 자동 계산</div>
+
+          <div style="margin-top:14px;" class="plan-toggle">
+            <label class="radio-pill">
+              <input type="radio" name="plan" id="planWeekly" checked />
+              주 결제
+            </label>
+            <label class="radio-pill">
+              <input type="radio" name="plan" id="planMonthly" />
+              월 결제
+            </label>
+          </div>
+
+          <div style="margin-top:12px;">
+            <div class="muted2" style="font-weight:950; font-size:13px;" id="durationLabel">기간(주)</div>
+            <select id="durationSelect"></select>
+          </div>
+
+          <div class="summary-bar">
+            <div>
+              <div class="muted2" style="font-size:12px; font-weight:950;">예상 결제 금액</div>
+              <div class="big" id="payAmount">₩0</div>
+            </div>
+            <div>
+              <div class="muted2" style="font-size:12px; font-weight:950;">수강 종료일</div>
+              <div class="big" id="endDate">-</div>
+            </div>
+          </div>
+
+          <div style="margin-top:12px;">
+            <button class="btn primary" id="buyBtn" style="width:100%;">결제하고 수강하기</button>
+          </div>
+
+          <div class="muted" id="teacherHint" style="margin-top:10px; font-size:13px; display:none;">
+            선생님 계정은 결제 없이 라이브/녹화 기능을 사용할 수 있어요. (본인 수업만)
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:18px;" id="sessions" data-reveal>
+        <div class="card pad-lg">
+          <div class="row">
+            <div>
+              <div class="h2">지난 수업 (다시보기) 🎬</div>
+              <div class="muted">수강 중인 학생만 열립니다. (선생님은 녹화 종료 시 자동 등록)</div>
+            </div>
+            <span class="chip">VOD</span>
+          </div>
+          <div id="sessionList"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title" id="modalTitle">다시보기</div>
+        <button class="btn" id="modalClose">닫기</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-video" id="modalVideo" aria-label="VOD 플레이어">
+          <video id="vodVideo" class="vod-video" controls playsinline></video>
+          <div id="vodEmpty" class="vod-empty">이 다시보기에는 영상 데이터가 없어요. (녹화 후 자동 저장됩니다)</div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn primary" id="modalOk">확인</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">© 2025 LiveClass. All rights reserved.</div>
+</body>
+</html>

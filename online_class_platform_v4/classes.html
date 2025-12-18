@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LiveClass - 수업 목록</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <nav>
+    <div class="container nav-inner">
+      <a class="logo" href="index.html"><span class="logo-dot"></span>LiveClass</a>
+      <div id="navLinks"></div>
+      <div id="navRight"></div>
+    </div>
+  </nav>
+
+  <section class="section">
+    <div class="container">
+      <div class="card pad-lg" data-reveal>
+        <div class="row">
+          <div>
+            <div class="h2">수업 목록</div>
+            <div class="muted">카테고리/검색으로 원하는 수업을 빠르게 찾을 수 있어요.</div>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; min-width:320px;">
+            <select id="filterCategory"></select>
+            <input id="searchInput" class="input" placeholder="검색(제목/선생님/설명)" />
+          </div>
+        </div>
+      </div>
+
+      <div id="classGrid" class="class-grid" data-reveal></div>
+    </div>
+  </section>
+
+  <div class="footer">© 2025 LiveClass. All rights reserved.</div>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LiveClass - 라이브</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <nav>
+    <div class="container nav-inner">
+      <a class="logo" href="index.html"><span class="logo-dot"></span>LiveClass</a>
+      <div id="navLinks"></div>
+      <div id="navRight"></div>
+    </div>
+  </nav>
+
+  <section class="section">
+    <div class="container" id="liveRoot">
+      <div class="row" data-reveal>
+        <div>
+          <div class="h2" id="liveTitle">Live Room</div>
+          <div class="muted" id="liveSub">-</div>
+        </div>
+        <a class="btn" id="sideSessionsLink" href="#">지난 수업 보기</a>
+      </div>
+
+      <div class="liveShell" data-reveal>
+        <div class="panel">
+          <div class="panelHead">
+            <h3>라이브 영상 영역</h3>
+            <div class="muted2" style="font-size:12px; font-weight:950;">데모 UI</div>
+          </div>
+          <div class="panelBody">
+            <div class="videoFrame" id="videoFrame">
+              <video id="liveVideo" class="liveVideo" autoplay playsinline muted></video>
+              <div class="videoOverlay" id="videoOverlay">카메라/마이크 연결 후 시작할 수 있어요 (데모)</div>
+            </div>
+
+            <div class="controlsRow">
+              <button class="btn primary" id="btnConnect">카메라/마이크 연결</button>
+              <button class="btn" id="btnShare">화면 공유</button>
+              <button class="btn" id="btnRecord">녹화 시작</button>
+              <button class="btn" id="btnLeave">나가기</button>
+
+              <div class="controlMini">
+                <label>화면 비율</label>
+                <select id="arSelect">
+                  <option value="16/9" selected>16:9</option>
+                  <option value="4/3">4:3</option>
+                  <option value="1/1">1:1</option>
+                  <option value="21/9">21:9</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="muted" id="recordHint" style="margin-top:10px; font-size:13px;">
+              녹화 종료 시, 지난 수업(다시보기)에 자동 등록됩니다.
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panelHead">
+            <h3>실시간 채팅</h3>
+            <div class="muted2" style="font-size:12px; font-weight:950;">online</div>
+          </div>
+          <div class="panelBody">
+            <div class="chatLog" id="chatLog"></div>
+            <div class="chatForm">
+              <input id="chatInput" class="input" placeholder="메시지를 입력..." />
+              <button id="chatSend" class="btn primary">전송</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">© 2025 LiveClass. All rights reserved.</div>
+</body>
+</html>

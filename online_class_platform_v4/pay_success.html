@@ -1,0 +1,90 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>결제 완료</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 560px; margin: 40px auto; padding: 20px; }
+    .card { border:1px solid #e5e7eb; border-radius:12px; padding:18px; box-shadow:0 6px 16px rgba(0,0,0,0.08); }
+    .muted { color:#6b7280; margin-top:8px; }
+    button { padding:10px 16px; border:none; border-radius:8px; background:#6d5efc; color:#fff; cursor:pointer; }
+    pre { background:#f4f4f5; padding:12px; border-radius:8px; font-size:13px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>결제 확인 중...</h2>
+    <div id="msg" class="muted">잠시만 기다려주세요.</div>
+    <pre id="log" style="display:none;"></pre>
+    <div style="margin-top:14px;">
+      <button id="goHome" style="display:none;">메인으로 이동</button>
+    </div>
+  </div>
+
+  <script>
+    (async function () {
+      const params = new URLSearchParams(location.search);
+      const paymentKey = params.get("paymentKey");
+      const orderId = params.get("orderId");
+      const amount = params.get("amount");
+      const classId = params.get("classId");
+      const returnUrl = params.get("returnUrl") || `http://127.0.0.1:5500/online_class_platform_v4/class_detail.html?id=${encodeURIComponent(classId || "")}`;
+
+      const msgEl = document.getElementById("msg");
+      const logEl = document.getElementById("log");
+      const goHome = document.getElementById("goHome");
+
+      function setLog(obj) {
+        logEl.style.display = "block";
+        logEl.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
+      }
+
+      if (!paymentKey || !orderId || !amount) {
+        msgEl.textContent = "필수 결제 정보가 없습니다.";
+        setLog({ paymentKey, orderId, amount });
+        goHome.style.display = "inline-block";
+        goHome.onclick = () => location.href = returnUrl;
+        return;
+      }
+
+      try {
+        const res = await fetch("http://localhost:3000/api/payments/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paymentKey, orderId, amount })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "결제 확인 실패");
+
+        // 수강 등록에 필요한 정보가 pending으로 저장되어 있으면 반영
+        try {
+          const pendingRaw = localStorage.getItem("lc_pending_enroll");
+          if (pendingRaw) {
+            const pending = JSON.parse(pendingRaw);
+            const { record, keys, classId: cid } = pending || {};
+            if (record && keys && cid) {
+              const enroll = JSON.parse(localStorage.getItem("lc_enrollments") || "{}");
+              keys.forEach(k => {
+                enroll[k] = enroll[k] || {};
+                enroll[k][cid] = record;
+              });
+              localStorage.setItem("lc_enrollments", JSON.stringify(enroll));
+            }
+            localStorage.removeItem("lc_pending_enroll");
+          }
+        } catch (_) {}
+
+        msgEl.textContent = "결제가 완료되었습니다. 수강 등록이 반영되었습니다.";
+        setLog(data);
+        goHome.style.display = "inline-block";
+        goHome.onclick = () => location.href = returnUrl;
+      } catch (e) {
+        msgEl.textContent = e.message || "결제 처리에 실패했습니다.";
+        setLog(e);
+        goHome.style.display = "inline-block";
+        goHome.onclick = () => location.href = returnUrl;
+      }
+    })();
+  </script>
+</body>
+</html>

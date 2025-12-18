@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LiveClass - 학생 대시보드</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <nav>
+    <div class="container nav-inner">
+      <a class="logo" href="index.html"><span class="logo-dot"></span>LiveClass</a>
+      <div id="navLinks"></div>
+      <div id="navRight"></div>
+    </div>
+  </nav>
+
+  <section class="section">
+    <div class="container" id="studentDash">
+      <div class="card pad-lg" data-reveal>
+        <div class="h2">내 수업 (학생)</div>
+        <div class="muted" style="margin-top:6px;">수강 중인 수업/만료일/라이브 입장을 관리합니다.</div>
+        <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+          <a class="btn" href="classes.html">수업 더 찾기</a>
+        </div>
+      </div>
+
+      <div id="studentClassList" style="margin-top:14px;" data-reveal></div>
+    </div>
+  </section>
+
+  <div class="footer">© 2025 LiveClass. All rights reserved.</div>
+</body>
+</html>

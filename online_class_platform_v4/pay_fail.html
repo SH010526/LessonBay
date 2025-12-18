@@ -1,0 +1,31 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>결제 실패</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 520px; margin: 40px auto; padding: 20px; }
+    .card { border:1px solid #e5e7eb; border-radius:12px; padding:18px; box-shadow:0 6px 16px rgba(0,0,0,0.08); }
+    .muted { color:#6b7280; margin-top:8px; }
+    button { padding:10px 16px; border:none; border-radius:8px; background:#6d5efc; color:#fff; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>결제가 취소되었어요.</h2>
+    <div id="msg" class="muted">다시 시도해주세요.</div>
+    <div style="margin-top:14px;">
+      <button id="backBtn">이전 페이지로</button>
+    </div>
+  </div>
+  <script>
+    const backBtn = document.getElementById("backBtn");
+    backBtn.onclick = () => {
+      const params = new URLSearchParams(location.search);
+      const returnUrl = params.get("returnUrl") || "http://127.0.0.1:5500/online_class_platform_v4/index.html";
+      localStorage.removeItem("lc_pending_enroll");
+      location.href = returnUrl;
+    };
+  </script>
+</body>
+</html>

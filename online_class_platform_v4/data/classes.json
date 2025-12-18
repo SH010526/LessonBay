@@ -1,0 +1,22 @@
+[
+  {
+    "id": "c_1765834816980",
+    "title": "영어 회화 초급",
+    "teacher": "이승훈",
+    "category": "영어회화",
+    "description": "영어 회화를 처음 시작하는 분들을 위한 기본 표현과 발음 교정.",
+    "weeklyPrice": 19000,
+    "monthlyPrice": 59000,
+    "thumb": "https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=1400&q=60"
+  },
+  {
+    "id": "c_1765834816990",
+    "title": "고등 수학 심화",
+    "teacher": "이승훈",
+    "category": "수학",
+    "description": "개념 정리 → 문제 풀이 루틴 → 심화 문제 접근까지.",
+    "weeklyPrice": 25000,
+    "monthlyPrice": 79000,
+    "thumb": "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1400&q=60"
+  }
+]

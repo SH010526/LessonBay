@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LiveClass - 수업 생성</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <nav>
+    <div class="container nav-inner">
+      <a class="logo" href="index.html"><span class="logo-dot"></span>LiveClass</a>
+      <div id="navLinks"></div>
+      <div id="navRight"></div>
+    </div>
+  </nav>
+
+  <section class="section">
+    <div class="container">
+      <div class="card pad-lg" id="createGuard" style="display:none;">
+        <div class="h2">수업 생성</div>
+        <div class="muted" style="margin-top:8px;">선생님 계정으로 로그인한 경우에만 생성됩니다.</div>
+        <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+          <a class="btn primary" href="login.html">로그인</a>
+          <a class="btn" href="signup.html">회원가입</a>
+        </div>
+      </div>
+
+      <div class="card pad-lg" id="createMain" data-reveal>
+        <div class="h2">수업 생성</div>
+        <div class="muted" style="margin-top:6px;">선생님 계정으로 로그인한 경우에만 생성됩니다.</div>
+
+        <form id="createClassForm" style="margin-top:14px;">
+          <div class="field">
+            <label>수업 제목</label>
+            <input id="cTitle" class="input" placeholder="예: 고등 수학 심화" />
+          </div>
+
+          <div class="grid cols-2" style="margin-top:12px;">
+            <div>
+              <label>카테고리 (선택)</label>
+              <select id="cCategorySelect">
+                <option value="수학">수학</option>
+                <option value="영어회화">영어회화</option>
+                <option value="국어">국어</option>
+                <option value="과학">과학</option>
+                <option value="코딩">코딩</option>
+                <option value="면접/자소서">면접/자소서</option>
+                <option value="__custom__">직접 입력</option>
+              </select>
+
+              <input id="cCategoryCustom" class="input" placeholder="카테고리 직접 입력" style="margin-top:10px; display:none;" />
+              <input id="cCategory" class="input" style="display:none;" />
+            </div>
+
+            <div>
+              <label>썸네일 이미지 (파일 업로드)</label>
+              <input id="cThumbFile" class="input" type="file" accept="image/*" />
+              <input id="cThumbData" type="hidden" />
+              <img id="cThumbPreview" alt="미리보기"
+                   style="margin-top:10px; width:100%; height:160px; object-fit:cover; border-radius:16px; border:1px solid rgba(15,23,42,.10); display:none;" />
+              <div class="muted" style="margin-top:8px; font-size:12px;">
+                ※ 파일 업로드 이미지는 브라우저 localStorage에 base64로 저장됩니다(데모).
+              </div>
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:12px;">
+            <label>설명</label>
+            <textarea id="cDesc" placeholder="수업 소개를 입력하세요."></textarea>
+          </div>
+
+          <div class="grid cols-2" style="margin-top:12px;">
+            <div class="field">
+              <label>주 결제 금액(원)</label>
+              <input id="cWeekly" class="input" type="number" value="19000" />
+            </div>
+            <div class="field">
+              <label>월 결제 금액(원)</label>
+              <input id="cMonthly" class="input" type="number" value="59000" />
+            </div>
+          </div>
+
+          <div style="margin-top:16px;">
+            <button class="btn primary" style="width:100%;">생성하기</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">© 2025 LiveClass. All rights reserved.</div>
+</body>
+</html>
