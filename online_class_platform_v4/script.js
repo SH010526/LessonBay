@@ -1,6 +1,6 @@
-﻿﻿/* ============================
-   LessonBay (Static + localStorage) — v12 FIXED (NO-REDUCE)
-   - ✅ Enrollment/Enter/Replay gating 안정화 + UI 반영
+﻿/* ============================
+   LessonBay (Static + localStorage) ? v12 FIXED (NO-REDUCE)
+   - ? Enrollment/Enter/Replay gating 안정화 + UI 반영
      1) enrollment를 ""(빈키)로 저장하지 않음 (읽기는 레거시 호환)
      2) 수강완료 즉시 상세페이지 버튼/문구 갱신(수강중/만료/재수강)
      3) 재생 버튼은 모달로 연결
@@ -11,7 +11,7 @@
    ============================ */
 
 /* ============================
-   ✅ Supabase Auth (메일 인증)
+   ? Supabase Auth (메일 인증)
    - login/signup을 localStorage가 아니라 Supabase로 통일
    - user_metadata에 name/role 저장
    - 세션 기반으로 localStorage(K.USER) 동기화해서
@@ -21,7 +21,7 @@
 const SUPABASE_URL = "https://pqvdexhxytahljultmjd.supabase.co";   // Project URL
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxdmRleGh4eXRhaGxqdWx0bWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5NjMzNTMsImV4cCI6MjA4MTUzOTM1M30.WzJWY3-92Bwkic-Wb2rOmZ1joEUj-s69cSL2hPT79fQ";             // anon public key
 
-// ✅ SDK가 없는 페이지에서도 크래시 나지 않게 (전역 supabase와 이름 충돌 방지)
+// ? SDK가 없는 페이지에서도 크래시 나지 않게 (전역 supabase와 이름 충돌 방지)
 let supabaseClient = null;
 try {
   if (typeof window !== "undefined" && window.supabase && typeof window.supabase.createClient === "function") {
@@ -54,7 +54,7 @@ const K = {
   SEEDED: "lc_seeded_v1",
 };
 
-// ✅ VOD(녹화) 저장소: IndexedDB
+// ? VOD(녹화) 저장소: IndexedDB
 const VOD_DB = {
   NAME: "lc_vod_db",
   STORE: "vods",
@@ -62,7 +62,7 @@ const VOD_DB = {
 };
 
 /* ============================
-   ✅ Supabase session -> local user sync
+   ? Supabase session -> local user sync
    ============================ */
 async function syncLocalUserFromSupabaseSession() {
   if (!supabaseClient) return;
@@ -200,7 +200,7 @@ async function vodDelete(vodKey) {
 }
 
 // ============================
-// ✅ VOD 함수명 호환
+// ? VOD 함수명 호환
 // ============================
 async function vodPutBlob(vodKey, blob) { return vodPut(vodKey, blob); }
 async function vodGetBlob(vodKey) { return vodGet(vodKey); }
@@ -209,7 +209,7 @@ async function vodDeleteBlob(vodKey) { return vodDelete(vodKey); }
 // 모달 코드에 saveClasses가 등장하는데, 실제 저장 함수는 setClasses임(호환 래퍼)
 function saveClasses(list) { return setClasses(list); }
 
-// ✅ VOD 데모 영상(Blob) 생성
+// ? VOD 데모 영상(Blob) 생성
 async function makeDemoVodBlob(title = "VOD") {
   const canvas = document.createElement("canvas");
   canvas.width = 1280;
@@ -332,7 +332,7 @@ const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 function safeParse(json, fallback) {
   try { return JSON.parse(json); } catch { return fallback; }
 }
-function won(n) { return "₩" + (Number(n) || 0).toLocaleString("ko-KR"); }
+function won(n) { return "\u20A9" + (Number(n) || 0).toLocaleString("ko-KR"); }
 function getPath() {
   const p = location.pathname.split("/").pop();
   return p || "index.html";
@@ -347,7 +347,7 @@ function escapeAttr(s) { return escapeHtml(s); }
 function normalizeEmail(email) { return String(email || "").trim().toLowerCase(); }
 
 // ---------------------------
-// ✅ BUTTON LOADING (signup 등에서 사용)
+// ? BUTTON LOADING (signup 등에서 사용)
 // - 기존 코드에서 setBtnLoading을 호출하지만 구현이 누락되어 있었음.
 // - 구현 누락 시 '가입하기' 클릭해도 콘솔 에러로 인해 화면상 아무 반응이 없는 것처럼 보임.
 // ---------------------------
@@ -371,7 +371,7 @@ function setBtnLoading(btn, loading, loadingText = "처리중...", idleText = nu
 }
 
 // ---------------------------
-// ✅ STORAGE MIGRATION
+// ? STORAGE MIGRATION
 // ---------------------------
 function migrateStorage() {
   if (!localStorage.getItem(K.USER)) {
@@ -495,7 +495,7 @@ function getProgress() { return safeParse(localStorage.getItem(K.PROGRESS) || "{
 function setProgress(v) { localStorage.setItem(K.PROGRESS, JSON.stringify(v)); }
 
 // ---------------------------
-// ✅ ROBUST USER KEY LIST
+// ? ROBUST USER KEY LIST
 // ---------------------------
 function userKeyList(u, includeEmptyLegacy = true) {
   if (!u) return [];
@@ -607,7 +607,7 @@ function isEnrollmentActiveForUser(u, classId) {
 }
 
 // ---------------------------
-// ✅ USERS NORMALIZE/DEDUPE (legacy 유지)
+// ? USERS NORMALIZE/DEDUPE (legacy 유지)
 // ---------------------------
 function normalizeUsersInStorage() {
   const raw = safeParse(localStorage.getItem(K.USERS) || "[]", []);
@@ -676,7 +676,7 @@ function normalizeCurrentUserInStorage() {
 }
 
 // ---------------------------
-// ✅ SEED
+// ? SEED
 // ---------------------------
 async function ensureSeedData() {
   if (localStorage.getItem(K.SEEDED) === "1" && localStorage.getItem(K.CLASSES)) return;
@@ -711,7 +711,7 @@ async function ensureSeedData() {
 }
 
 // ---------------------------
-// ✅ NAV + LOGOUT
+// ? NAV + LOGOUT
 // ---------------------------
 function buildNavLinks() {
   const user = getUser();
@@ -733,7 +733,7 @@ function clearOldAuthKeys() {
   localStorage.removeItem("CURRENT_USER");
 }
 
-// ✅ Supabase 로그아웃 포함
+// ? Supabase 로그아웃 포함
 async function doLogout(goHome = true) {
   try {
     if (supabaseClient) {
@@ -798,7 +798,7 @@ function runReveal() {
 }
 
 // ---------------------------
-// ✅ GLOBAL DISABLED BLOCKER (for <a> tags)
+// ? GLOBAL DISABLED BLOCKER (for <a> tags)
 // ---------------------------
 let __gateBlockerInstalled = false;
 function installGateBlockerOnce() {
@@ -832,7 +832,7 @@ function setGateDisabled(el, disabled) {
 }
 
 // ---------------------------
-// ✅ AUTH (OTP + 로컬 저장 기본, Supabase는 보조)
+// ? AUTH (OTP + 로컬 저장 기본, Supabase는 보조)
 // ---------------------------
 function pickValue(...ids) {
   for (const id of ids) {
@@ -1046,7 +1046,7 @@ function handleLoginPage() {
 }
 
 // ---------------------------
-// ✅ SETTINGS (계정 삭제)
+// ? SETTINGS (계정 삭제)
 // ---------------------------
 function removeUserData(u) {
   if (!u) return;
@@ -1140,7 +1140,7 @@ function handleSettingsPage() {
 }
 
 /* ============================
-   ✅ HOME / LIST / DETAIL / LIVE
+   ? HOME / LIST / DETAIL / LIVE
    (아래부터는 네 원본 코드 그대로)
    ============================ */
 
@@ -1225,7 +1225,7 @@ function loadClassesPage() {
 }
 
 // ---------------------------
-// ✅ CLASS DETAIL (핵심)
+// ? CLASS DETAIL (핵심)
 // ---------------------------
 function fmtDateKR(d) {
   const dt = new Date(d);
@@ -1288,7 +1288,7 @@ function ensureReplayModalBinding() {
     cleanupVodUrl();
 
     // 영상이 있으면 IndexedDB에서 꺼내서 재생
-    // ✅ 없으면(예: 이전 데이터에 vodKey만 있고 blob 누락) 데모 영상을 "자동 생성"해서 보여줌
+    // ? 없으면(예: 이전 데이터에 vodKey만 있고 blob 누락) 데모 영상을 "자동 생성"해서 보여줌
     if (vodVideo) {
       let blob = null;
 
@@ -1336,7 +1336,7 @@ function ensureReplayModalBinding() {
   };
 }
 
-// ✅ 강력한 버튼 탐지 (입장/수강 등록 후 입장 포함)
+// ? 강력한 버튼 탐지 (입장/수강 등록 후 입장 포함)
 function getDetailEnterButtons() {
   const candidates = Array.from(new Set([
     ...$$("#goLiveBtn"),
@@ -1371,7 +1371,7 @@ function getDetailEnterButtons() {
   });
 }
 
-// ✅ 재생 버튼도 강제로 갱신
+// ? 재생 버튼도 강제로 갱신
 function refreshReplayButtons(canWatch) {
   const btns = Array.from(new Set([
     ...$$("#sessionList button"),
@@ -1420,7 +1420,7 @@ function loadClassDetailPage() {
   const enrollStateText = $("#enrollStateText");
   const teacherHint = $("#teacherHint");
 
-  // ✅ buy button id가 다를 수도 있으니 강제로 찾아줌
+  // ? buy button id가 다를 수도 있으니 강제로 찾아줌
   function getBuyButton() {
     const direct = $("#buyBtn");
     if (direct) return direct;
@@ -1652,7 +1652,7 @@ function loadClassDetailPage() {
 
     const enroll = getEnrollments();
 
-    // ✅ v12: 저장키에는 빈키("")를 포함하지 않는다 (읽기는 호환)
+    // ? v12: 저장키에는 빈키("")를 포함하지 않는다 (읽기는 호환)
     const keys = userKeyList(user, false).filter(k => k !== "");
 
     if (!keys.length) {
@@ -1675,7 +1675,7 @@ function loadClassDetailPage() {
 
     setEnrollments(enroll);
 
-    // ✅ v13: 저장 직후, 현재 로그인 사용자 키로 다시 한번 정규화/검증
+    // ? v13: 저장 직후, 현재 로그인 사용자 키로 다시 한번 정규화/검증
     // (특히 같은 이름/역할 중복, 예전 저장키 혼재 등으로 UI가 안 바뀌는 케이스 방어)
     const userNow = getUser() || user;
     normalizeEnrollmentsForUser(userNow, c.id);
@@ -1752,16 +1752,51 @@ function loadClassDetailPage() {
         selectEl.value = latestAssignId;
       }
       selectEl.disabled = !assignList.length;
+      if (!selectEl.dataset.boundChange) {
+        selectEl.dataset.boundChange = "1";
+        selectEl.addEventListener("change", () => {
+          assignPendingSelect = selectEl.value;
+          if (formWrap) formWrap.dataset.editing = "";
+          renderAssignments();
+        });
+      }
     }
-    const submitBtn = $("#assignSubmitBtn");
-    if (submitBtn) submitBtn.disabled = !assignList.length;
+    const submitBtnMain = $("#assignSubmitBtn");
+    if (submitBtnMain) submitBtnMain.disabled = !assignList.length;
     let selectedAssignId = selectEl?.value || latestAssignId;
     assignPendingSelect = null;
     const meta = (selectedAssignId && assignMap[selectedAssignId]) ? assignMap[selectedAssignId] : (assignList[assignList.length - 1] || {});
 
     const isOwnerTeacher = user?.role === "teacher" && user?.name === c.teacher;
     const myEmail = normalizeEmail(user?.email || "");
-    const myAssign = assigns.find(a => normalizeEmail(a.userEmail) === myEmail && (!a.assignId || a.assignId === selectedAssignId));
+    const myAssign = [...assigns].reverse().find(a => normalizeEmail(a.userEmail) === myEmail && (!a.assignId || a.assignId === selectedAssignId));
+    const formWrap = document.getElementById("assignFormWrap");
+    const textEl = document.getElementById("assignText");
+    const fileEl = document.getElementById("assignFile");
+    const submitBtn = submitBtnMain;
+    const toggleStudentFields = (show) => {
+      if (textEl) textEl.style.display = show ? "block" : "none";
+      if (fileEl) fileEl.style.display = show ? "block" : "none";
+      if (submitBtn) submitBtn.style.display = show ? "block" : "none";
+    };
+    // 학생 편집 상태 플래그 (dataset.editing = "1" 이면 편집/제출 가능)
+    let isEditingStudent = formWrap?.dataset.editing === "1";
+
+    // 학생: 선택된 과제 기준으로만 편집 버튼/입력 노출 결정
+    if (!isOwnerTeacher) {
+      const hasSubmission = !!myAssign;
+      if (hasSubmission) {
+        if (isEditingStudent) {
+          toggleStudentFields(true);
+        } else {
+          if (formWrap) formWrap.dataset.editing = "0";
+          toggleStudentFields(false);
+        }
+      } else {
+        if (formWrap) formWrap.dataset.editing = "1";
+        toggleStudentFields(true);
+      }
+    }
 
     // 과제 정보 카드는 제거 (폼만 유지)
     const metaInfo = document.getElementById("assignMetaInfo");
@@ -1786,7 +1821,7 @@ function loadClassDetailPage() {
           const submitted = myAssign.submittedAt || myAssign.at;
           const updated = myAssign.updatedAt ? ` / 수정: ${new Date(myAssign.updatedAt).toLocaleString("ko-KR")}` : "";
           const titleTxt = assignMap[myAssign.assignId || selectedAssignId || ""]?.title || "과제";
-          statusEl.textContent = `${titleTxt} 제출 완료 (${new Date(submitted).toLocaleString("ko-KR")}${updated}) · ${dueTxt}`;
+          statusEl.textContent = `${titleTxt} 제출 완료 (${new Date(submitted).toLocaleString("ko-KR")}${updated}) · ${dueTxt} · 수정하려면 수정 버튼을 눌러주세요.`;
         } else {
           statusEl.textContent = `선택된 과제: ${assignMap[selectedAssignId || latestAssignId || ""]?.title || "과제"} · ${dueTxt}`;
         }
@@ -1968,7 +2003,7 @@ function loadClassDetailPage() {
     }
 
     if (!isOwnerTeacher) {
-      // 학생 화면: 본인 제출만 보여주기
+      // 학생 화면: 선택된 과제 기준으로 본인 제출만 보여주기
       if (myAssign) {
         list.innerHTML = `
           <div class="muted" style="margin-bottom:6px;">제출한 과제는 선생님만 확인할 수 있습니다.</div>
@@ -1989,15 +2024,29 @@ function loadClassDetailPage() {
         // 내 제출 수정: 폼에 값 채워서 다시 제출할 수 있게
         $("#assignEditMine")?.addEventListener("click", () => {
           const sel = document.getElementById("assignSelect");
-          if (sel && myAssign.assignId) sel.value = myAssign.assignId;
-          const txt = document.getElementById("assignText");
-          if (txt) txt.value = myAssign.text || "";
-          const status = document.getElementById("assignStatus");
-          if (status) status.textContent = "수정 후 다시 제출 버튼을 눌러주세요.";
-          window.scrollTo({ top: 0, behavior: "smooth" });
+      if (sel && myAssign.assignId) sel.value = myAssign.assignId;
+      const txt = document.getElementById("assignText");
+      if (txt) txt.value = myAssign.text || "";
+      const status = document.getElementById("assignStatus");
+      if (status) status.textContent = "수정 후 다시 제출 버튼을 눌러주세요.";
+      if (formWrap) formWrap.dataset.editing = "1";
+      toggleStudentFields(true);
+      if (formWrap) formWrap.style.display = "block";
         });
+        // 제출한 상태에서는 기본적으로 입력 필드 숨김 (수정 버튼을 눌렀을 때만 다시 보임)
+        const showForm = formWrap?.dataset.editing === "1";
+        if (formWrap) {
+          formWrap.dataset.editing = showForm ? "1" : "0";
+          formWrap.style.display = showForm ? "block" : "none";
+        }
+        toggleStudentFields(showForm);
       } else {
         list.innerHTML = `<div class="muted" style="font-size:13px;">제출한 과제가 없습니다. 제출 후에는 선생님만 전체 목록을 볼 수 있습니다.</div>`;
+        toggleStudentFields(true);
+        if (formWrap) {
+          formWrap.dataset.editing = "1";
+          formWrap.style.display = "block";
+        }
       }
       return;
     }
@@ -2030,7 +2079,9 @@ function loadClassDetailPage() {
           const id = btn.getAttribute("data-agrade");
           const scoreInput = document.querySelector(`[data-ascore="${CSS.escape(id)}"]`);
           const cmtInput = document.querySelector(`[data-acmt="${CSS.escape(id)}"]`);
-          const score = Number(scoreInput?.value || 0);
+          let score = Number(scoreInput?.value || 0);
+          if (Number.isNaN(score)) score = 0;
+          score = Math.max(0, Math.min(100, score));
           const comment = (cmtInput?.value || "").trim();
           const all = getAssignments();
           all[c.id] = (all[c.id] || []).map(a => a.id === id ? { ...a, score, comment } : a);
@@ -2051,7 +2102,7 @@ function loadClassDetailPage() {
       ${revs.length ? revs.map(r => `
         <div class="session-item">
           <div>
-            <div class="session-title">⭐ ${r.rating} · ${escapeHtml(r.userName || r.userEmail || "")}</div>
+            <div class="session-title">★ ${r.rating} · ${escapeHtml(r.userName || r.userEmail || "")}</div>
             <div class="session-sub">${new Date(r.at).toLocaleString("ko-KR")}</div>
             <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(r.text || "")}</div>
           </div>
@@ -2133,7 +2184,7 @@ function loadClassDetailPage() {
 
   // 과제 제출 (학생만)
   const assignForm = $("#assignFormWrap");
-  if (assignForm) assignForm.style.display = (user?.role === "student") ? "block" : "none";
+    if (assignForm) assignForm.style.display = (user?.role === "student") ? "block" : "none";
   $("#assignSubmitBtn")?.addEventListener("click", () => {
     if (!user || user.role !== "student") return;
     const metaMap = getAssignMeta();
@@ -2154,7 +2205,10 @@ function loadClassDetailPage() {
       const assigns = getAssignments();
       assigns[c.id] = assigns[c.id] || [];
       const nowIso = new Date().toISOString();
-      const idx = assigns[c.id].findIndex(a => normalizeEmail(a.userEmail) === normalizeEmail(user.email));
+      const idx = assigns[c.id].findIndex(a =>
+        normalizeEmail(a.userEmail) === normalizeEmail(user.email) &&
+        (a.assignId || "") === (currentAssignId || "")
+      );
       const base = {
         userEmail: user.email,
         userName: user.name,
@@ -2182,9 +2236,26 @@ function loadClassDetailPage() {
         });
       }
       setAssignments(assigns);
-      $("#assignText").value = "";
-      if ($("#assignFile")) $("#assignFile").value = "";
+      // 제출 후 바로 읽기모드로 전환하고, 선택 유지
+      assignPendingSelect = currentAssignId; // 방금 제출한 과제로 선택 유지
+      // 먼저 읽기 모드 플래그를 내려놓은 뒤 렌더링
+      const formWrapNow = document.getElementById("assignFormWrap");
+      if (formWrapNow) formWrapNow.dataset.editing = "0";
       renderAssignments();
+      // 최신 DOM 기준으로 입력/버튼 숨기기
+      const formNow = document.getElementById("assignFormWrap");
+      const txtNow = document.getElementById("assignText");
+      const fileNow = document.getElementById("assignFile");
+      const btnNow = document.getElementById("assignSubmitBtn");
+      if (formNow) { formNow.dataset.editing = "0"; formNow.style.display = "none"; }
+      if (txtNow) txtNow.style.display = "none";
+      if (fileNow) fileNow.style.display = "none";
+      if (btnNow) btnNow.style.display = "none";
+      const st = document.getElementById("assignStatus");
+      if (st) {
+        const titleTxt = assignList.find(a => a.id === currentAssignId)?.title || "과제";
+        st.textContent = `${titleTxt} 제출 완료. 수정하려면 수정 버튼을 눌러주세요.`;
+      }
     };
 
     if (file) {
@@ -2488,7 +2559,7 @@ function renderReplaysList(classId) {
 }
 
 // ---------------------------
-// ✅ CREATE / DASH / LIVE
+// ? CREATE / DASH / LIVE
 // ---------------------------
 function handleCreateClassPage() {
   const form = $("#createClassForm");
@@ -2967,11 +3038,11 @@ function loadLivePage() {
             });
             setReplays(rp);
 
-            if (recordHint) recordHint.textContent = "✅ 녹화가 저장되었고, 다시보기에 등록했습니다.";
+            if (recordHint) recordHint.textContent = "? 녹화가 저장되었고, 다시보기에 등록했습니다.";
             alert("녹화를 종료했고, 다시보기에 등록했습니다.");
           } catch (e) {
             console.error(e);
-            if (recordHint) recordHint.textContent = "⚠️ 녹화 저장에 실패했습니다.";
+            if (recordHint) recordHint.textContent = "?? 녹화 저장에 실패했습니다.";
             alert("녹화 저장 실패\n" + (e?.message || ""));
           } finally {
             recordChunks = [];
@@ -2980,7 +3051,7 @@ function loadLivePage() {
 
         recording = true;
         btnRecord.textContent = "녹화 종료";
-        if (recordHint) recordHint.textContent = "🔴 녹화 중... 종료하면 다시보기에 자동 등록됩니다.";
+        if (recordHint) recordHint.textContent = "?? 녹화 중... 종료하면 다시보기에 자동 등록됩니다.";
         recorder.start();
         return;
       }
@@ -2988,7 +3059,7 @@ function loadLivePage() {
       // stop
       recording = false;
       btnRecord.textContent = "녹화 시작";
-      if (recordHint) recordHint.textContent = "⏳ 저장 중... (잠시만)";
+      if (recordHint) recordHint.textContent = "? 저장 중... (잠시만)";
       try {
         recorder?.stop();
       } catch (_) {
@@ -3055,13 +3126,13 @@ function loadLivePage() {
 }
 
 // ---------------------------
-// ✅ INIT
+// ? INIT
 // ---------------------------
 function init() {
   migrateStorage();
   normalizeUsersInStorage();
-  normalizeCurrentUserInStorage(); // ✅ 핵심
-  installGateBlockerOnce();        // ✅ <a> disabled blocking
+  normalizeCurrentUserInStorage(); // ? 핵심
+  installGateBlockerOnce();        // ? <a> disabled blocking
 
   ensureSeedData().then(() => {
     updateNav();
@@ -3083,3 +3154,5 @@ function init() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+
