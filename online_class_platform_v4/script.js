@@ -44,6 +44,13 @@ const K = {
   ENROLL: "lc_enrollments",
   REPLAY: "lc_replays",
   CHAT: "lc_chat",
+  MATERIALS: "lc_materials",
+  ASSIGN: "lc_assignments",
+  ASSIGN_META: "lc_assign_meta",
+  REVIEWS: "lc_reviews",
+  QNA: "lc_qna",
+  ATTEND: "lc_attendance",
+  PROGRESS: "lc_progress",
   SEEDED: "lc_seeded_v1",
 };
 
@@ -58,10 +65,10 @@ const VOD_DB = {
    ✅ Supabase session -> local user sync
    ============================ */
 async function syncLocalUserFromSupabaseSession() {
-  if (!supabase) return;
+  if (!supabaseClient) return;
 
   try {
-    const { data, error } = await supabase.auth.getSession();
+    const { data, error } = await supabaseClient.auth.getSession();
     if (error) return;
 
     const session = data?.session || null;
@@ -316,7 +323,10 @@ const OLD_USERS_KEYS = ["users", "LessonBay_users"];
 const OLD_CLASSES_KEYS = ["classes", "LessonBay_classes", "classData"];
 const OLD_ENROLL_KEYS = ["enrollments", "LessonBay_enrollments"];
 
-const $ = (sel, el = document) => el.querySelector(sel);
+// 과제 선택 유지용 임시 변수
+let assignPendingSelect = null;
+
+const $ = (sel, el = document) => el.querySelector(sel); 
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
 function safeParse(json, fallback) {
@@ -467,6 +477,22 @@ function setReplays(v) { localStorage.setItem(K.REPLAY, JSON.stringify(v)); }
 
 function getChat() { return safeParse(localStorage.getItem(K.CHAT) || "{}", {}); }
 function setChat(v) { localStorage.setItem(K.CHAT, JSON.stringify(v)); }
+
+// 자료/과제/리뷰/Q&A/출결/진도
+function getMaterials() { return safeParse(localStorage.getItem(K.MATERIALS) || "{}", {}); }
+function setMaterials(v) { localStorage.setItem(K.MATERIALS, JSON.stringify(v)); }
+function getAssignments() { return safeParse(localStorage.getItem(K.ASSIGN) || "{}", {}); }
+function setAssignments(v) { localStorage.setItem(K.ASSIGN, JSON.stringify(v)); }
+function getAssignMeta() { return safeParse(localStorage.getItem(K.ASSIGN_META) || "{}", {}); }
+function setAssignMeta(v) { localStorage.setItem(K.ASSIGN_META, JSON.stringify(v || {})); }
+function getReviews() { return safeParse(localStorage.getItem(K.REVIEWS) || "{}", {}); }
+function setReviews(v) { localStorage.setItem(K.REVIEWS, JSON.stringify(v)); }
+function getQna() { return safeParse(localStorage.getItem(K.QNA) || "{}", {}); }
+function setQna(v) { localStorage.setItem(K.QNA, JSON.stringify(v)); }
+function getAttendance() { return safeParse(localStorage.getItem(K.ATTEND) || "{}", {}); }
+function setAttendance(v) { localStorage.setItem(K.ATTEND, JSON.stringify(v)); }
+function getProgress() { return safeParse(localStorage.getItem(K.PROGRESS) || "{}", {}); }
+function setProgress(v) { localStorage.setItem(K.PROGRESS, JSON.stringify(v)); }
 
 // ---------------------------
 // ✅ ROBUST USER KEY LIST
@@ -1369,6 +1395,7 @@ function loadClassDetailPage() {
   const id = getParam("id");
   const classes = getClasses();
   const c = classes.find(x => x.id === id);
+  const user = getUser();
 
   if (!c) {
     $("#detailTitle").textContent = "수업을 찾을 수 없습니다.";
@@ -1670,6 +1697,518 @@ function loadClassDetailPage() {
   });
 
   renderReplaysList(c.id);
+
+  // ---------------------------
+  // 자료실 / 과제 / 리뷰 / Q&A 렌더링
+  // ---------------------------
+  function renderMaterials() {
+    const list = $("#materialList");
+    if (!list) return;
+    const mats = getMaterials()[c.id] || [];
+    list.innerHTML = mats.length
+      ? mats.map(m => `
+        <div class="session-item">
+          <div>
+            <div class="session-title">${escapeHtml(m.title)}</div>
+            <div class="session-sub">${new Date(m.at).toLocaleString("ko-KR")} · ${escapeHtml(m.author || "")}</div>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <a class="btn primary" href="${escapeAttr(m.url)}" download>다운로드</a>
+          </div>
+        </div>
+      `).join("")
+      : `<div class="muted" style="font-size:13px;">아직 등록된 자료가 없습니다.</div>`;
+  }
+
+  function renderAssignments() {
+    const list = $("#assignList");
+    if (!list) return;
+    const assigns = getAssignments()[c.id] || [];
+    const metaAll = getAssignMeta();
+    // 과제 목록을 배열로 정규화 (기존 단일 객체 저장 호환)
+    let assignList = [];
+    if (Array.isArray(metaAll[c.id])) {
+      assignList = metaAll[c.id];
+    } else if (metaAll[c.id]) {
+      assignList = [{ id: metaAll[c.id].id || ("asg_" + Date.now()), ...metaAll[c.id] }];
+    }
+    assignList = assignList.map(a => a.id ? a : { ...a, id: "asg_" + Date.now() + "_" + Math.random().toString(16).slice(2) });
+    metaAll[c.id] = assignList;
+    setAssignMeta(metaAll);
+
+    const assignMap = Object.fromEntries(assignList.map(a => [a.id, a]));
+    const latestAssignId = assignList.length ? assignList[assignList.length - 1].id : null;
+    const selectEl = $("#assignSelect");
+    const prevSelected = assignPendingSelect || selectEl?.value || null;
+    if (selectEl) {
+      selectEl.innerHTML = assignList.length
+        ? assignList.map(a => `<option value="${escapeAttr(a.id)}">${escapeHtml(a.title || "무제")} · ${a.dueAt ? new Date(a.dueAt).toLocaleString("ko-KR") : "마감 없음"}</option>`).join("")
+        : `<option>등록된 과제가 없습니다</option>`;
+      if (prevSelected && assignMap[prevSelected]) {
+        selectEl.value = prevSelected;
+      } else if (!selectEl.value && latestAssignId) {
+        selectEl.value = latestAssignId;
+      } else if (selectEl.value && !assignMap[selectEl.value] && latestAssignId) {
+        selectEl.value = latestAssignId;
+      }
+      selectEl.disabled = !assignList.length;
+    }
+    const submitBtn = $("#assignSubmitBtn");
+    if (submitBtn) submitBtn.disabled = !assignList.length;
+    let selectedAssignId = selectEl?.value || latestAssignId;
+    assignPendingSelect = null;
+    const meta = (selectedAssignId && assignMap[selectedAssignId]) ? assignMap[selectedAssignId] : (assignList[assignList.length - 1] || {});
+
+    const isOwnerTeacher = user?.role === "teacher" && user?.name === c.teacher;
+    const myEmail = normalizeEmail(user?.email || "");
+    const myAssign = assigns.find(a => normalizeEmail(a.userEmail) === myEmail && (!a.assignId || a.assignId === selectedAssignId));
+
+    // 과제 정보 카드는 제거 (폼만 유지)
+    const metaInfo = document.getElementById("assignMetaInfo");
+    if (metaInfo) metaInfo.remove();
+
+    // 상태 안내 (학생용)
+    let statusEl = document.getElementById("assignStatus");
+    if (!statusEl) {
+      statusEl = document.createElement("div");
+      statusEl.id = "assignStatus";
+      statusEl.className = "muted";
+      statusEl.style.marginTop = "6px";
+      const wrap = document.getElementById("assignFormWrap")?.parentElement;
+      if (wrap) wrap.insertBefore(statusEl, document.getElementById("assignFormWrap"));
+    }
+    if (statusEl) {
+      if (!assignList.length) {
+        statusEl.textContent = "등록된 과제가 없습니다.";
+      } else {
+        const dueTxt = meta?.dueAt ? `마감: ${new Date(meta.dueAt).toLocaleString("ko-KR")}` : "마감 설정 없음";
+        if (myAssign) {
+          const submitted = myAssign.submittedAt || myAssign.at;
+          const updated = myAssign.updatedAt ? ` / 수정: ${new Date(myAssign.updatedAt).toLocaleString("ko-KR")}` : "";
+          statusEl.textContent = `제출 완료 (${new Date(submitted).toLocaleString("ko-KR")}${updated}) · ${dueTxt}`;
+        } else {
+          statusEl.textContent = `아직 제출하지 않았습니다. ${dueTxt}`;
+        }
+      }
+    }
+
+    // 마감/과제 설정 UI (선생님)
+    if (isOwnerTeacher) {
+      let metaBox = document.getElementById("assignMetaBox");
+      if (!metaBox) {
+        metaBox = document.createElement("div");
+        metaBox.id = "assignMetaBox";
+        metaBox.className = "muted";
+        metaBox.style.marginBottom = "8px";
+        list.parentElement?.insertBefore(metaBox, list);
+      }
+      const dueVal = meta?.dueAt || "";
+      metaBox.innerHTML = `
+        <div style="display:grid; gap:8px; border:1px solid rgba(15,23,42,.08); padding:10px; border-radius:12px; background:rgba(255,255,255,.7);">
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <strong>과제 설정</strong>
+            <input type="text" id="assignTitleInput" class="input" style="width:220px;" placeholder="과제명" value="${escapeAttr(meta.title || "")}">
+            <input type="datetime-local" id="assignDueInput" class="input" style="width:200px;" step="60" min="2000-01-01T00:00" value="${dueVal}">
+            <button class="btn" id="assignDueSave">저장</button>
+            <button class="btn" id="assignDueClear">초기화</button>
+          </div>
+          <textarea id="assignDescInput" class="input" placeholder="과제 설명을 입력하세요.">${escapeHtml(meta.desc || "")}</textarea>
+          <div class="muted" style="font-size:12px;">마감 이후 제출/수정은 차단됩니다.</div>
+        </div>
+        <div id="assignListMeta" style="margin-top:8px;"></div>
+      `;
+      const dueInputEl = document.getElementById("assignDueInput");
+      // 마우스 휠로 시간/분이 계속 순환되는 것을 방지
+      if (dueInputEl) {
+        dueInputEl.addEventListener("wheel", (e) => { e.preventDefault(); }, { passive: false });
+      }
+      // 선택된 과제 내용을 설정 폼에 반영 (편집 중이 아닐 때)
+      if (!metaBox.dataset.editing) {
+        const t = document.getElementById("assignTitleInput");
+        const d = document.getElementById("assignDescInput");
+        const due = document.getElementById("assignDueInput");
+        if (t) t.value = meta?.title || "";
+        if (d) d.value = meta?.desc || "";
+        if (due) due.value = meta?.dueAt || "";
+      }
+      document.getElementById("assignDueSave")?.addEventListener("click", () => {
+        const v = document.getElementById("assignDueInput")?.value || "";
+        const title = (document.getElementById("assignTitleInput")?.value || "").trim();
+        const desc = (document.getElementById("assignDescInput")?.value || "").trim();
+        const metaAll2 = getAssignMeta();
+        let listArr = Array.isArray(metaAll2[c.id]) ? metaAll2[c.id] : [];
+        const editId = metaBox.dataset.editing || null;
+        if (editId) {
+          listArr = listArr.map(m => m.id === editId ? { ...m, title, desc, dueAt: v || null, updatedAt: new Date().toISOString() } : m);
+          assignPendingSelect = editId;
+        } else {
+          const newId = "asg_" + Date.now();
+          listArr.push({ id: newId, title, desc, dueAt: v || null, createdAt: new Date().toISOString(), updatedAt: null });
+          assignPendingSelect = newId;
+        }
+        metaBox.dataset.editing = "";
+        metaAll2[c.id] = listArr;
+        setAssignMeta(metaAll2);
+        // 저장 후에도 현재 입력값을 그대로 유지
+        if (!metaBox.dataset.editing) {
+          const t = document.getElementById("assignTitleInput");
+          const d = document.getElementById("assignDescInput");
+          const due = document.getElementById("assignDueInput");
+          if (t) t.value = title;
+          if (d) d.value = desc;
+          if (due) due.value = v;
+        }
+        renderAssignments();
+      });
+      document.getElementById("assignDueClear")?.addEventListener("click", () => {
+        metaBox.dataset.editing = "";
+        assignPendingSelect = null;
+        const t = document.getElementById("assignTitleInput");
+        const d = document.getElementById("assignDescInput");
+        const due = document.getElementById("assignDueInput");
+        if (t) t.value = "";
+        if (d) d.value = "";
+        if (due) due.value = "";
+      });
+
+      // 과제 목록(설정/수정)
+      const metaListBox = document.getElementById("assignListMeta");
+      if (metaListBox) {
+        metaListBox.innerHTML = assignList.length ? assignList.map(m => `
+          <div class="session-item" style="border-left:3px solid rgba(109,94,252,.35); margin-top:6px;">
+            <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+              <div class="session-title">${escapeHtml(m.title || "무제")}</div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <button class="btn" data-assign-edit="${escapeAttr(m.id)}">수정</button>
+                <button class="btn danger" data-assign-delete="${escapeAttr(m.id)}">삭제</button>
+              </div>
+            </div>
+            <div class="session-sub">${m.dueAt ? `마감: ${new Date(m.dueAt).toLocaleString("ko-KR")}` : "마감 없음"}</div>
+            ${m.desc ? `<div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(m.desc)}</div>` : ``}
+          </div>
+        `).join("") : `<div class="muted" style="font-size:13px;">등록된 과제가 없습니다. 과제명을 입력 후 저장을 눌러 추가하세요.</div>`;
+
+        $$("[data-assign-edit]").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const id = btn.getAttribute("data-assign-edit");
+            const target = assignMap[id];
+            if (!target) return;
+            metaBox.dataset.editing = id;
+            assignPendingSelect = id;
+            const t = document.getElementById("assignTitleInput");
+            const d = document.getElementById("assignDescInput");
+            const due = document.getElementById("assignDueInput");
+            if (t) t.value = target.title || "";
+            if (d) d.value = target.desc || "";
+            if (due) due.value = target.dueAt || "";
+            if (selectEl) selectEl.value = id;
+            const submitBtn2 = document.getElementById("assignSubmitBtn");
+            if (submitBtn2) submitBtn2.disabled = false;
+          });
+        });
+        $$("[data-assign-delete]").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const id = btn.getAttribute("data-assign-delete");
+            if (!confirm("해당 과제를 삭제할까요?")) return;
+            const metaAll3 = getAssignMeta();
+            const listArr = (Array.isArray(metaAll3[c.id]) ? metaAll3[c.id] : []).filter(m => m.id !== id);
+            metaAll3[c.id] = listArr;
+            setAssignMeta(metaAll3);
+            const assignsAll = getAssignments();
+            assignsAll[c.id] = (assignsAll[c.id] || []).filter(a => a.assignId !== id);
+            setAssignments(assignsAll);
+            if (selectEl && listArr.length) {
+              selectEl.value = listArr[listArr.length - 1].id;
+            }
+            renderAssignments();
+          });
+        });
+      }
+    } else {
+      const metaBox = document.getElementById("assignMetaBox");
+      if (metaBox) metaBox.remove();
+    }
+
+    if (!isOwnerTeacher) {
+      list.innerHTML = `<div class="muted" style="font-size:13px;">제출한 과제는 선생님만 확인할 수 있습니다.</div>`;
+      return;
+    }
+
+    list.innerHTML = assigns.length
+      ? `<div class="muted" style="margin-bottom:6px;">제출 목록 (${assigns.length})</div>` +
+        assigns.map(a => `
+        <div class="session-item" style="border-left:4px solid rgba(109,94,252,.45); background:linear-gradient(90deg, rgba(109,94,252,.06), rgba(109,94,252,.02));">
+          <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+            <div class="session-title">${escapeHtml(a.userName || a.userEmail || "-")}</div>
+            <span class="chip" style="background:rgba(109,94,252,.12);">${escapeHtml(assignMap[a.assignId || latestAssignId || ""]?.title || "학생 제출")}</span>
+          </div>
+          <div class="session-sub">제출: ${new Date(a.submittedAt || a.at).toLocaleString("ko-KR")}${a.updatedAt ? ` / 수정: ${new Date(a.updatedAt).toLocaleString("ko-KR")}` : ""}</div>
+          <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(a.text || "")}</div>
+          ${a.url ? `<div class="session-sub"><a href="${escapeAttr(a.url)}" target="_blank">링크 열기</a></div>` : ``}
+          ${a.fileName && a.fileData ? `<div class="session-sub"><a href="${escapeAttr(a.fileData)}" download="${escapeAttr(a.fileName)}">첨부파일 다운로드 (${escapeHtml(a.fileName)})</a></div>` : ``}
+          ${typeof a.score === "number" ? `<div class="session-sub">점수: ${a.score} / 피드백: ${escapeHtml(a.comment || "-")}</div>` : ``}
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+            <input type="number" min="0" max="100" data-ascore="${escapeAttr(a.id)}" class="input" style="width:90px;" placeholder="점수">
+            <input type="text" data-acmt="${escapeAttr(a.id)}" class="input" style="width:160px;" placeholder="피드백">
+            <button class="btn primary" data-agrade="${escapeAttr(a.id)}">저장</button>
+          </div>
+        </div>
+      `).join("")
+      : `<div class="muted" style="font-size:13px;">제출된 과제가 없습니다.</div>`;
+
+    if (isOwnerTeacher) {
+      $$("[data-agrade]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const id = btn.getAttribute("data-agrade");
+          const scoreInput = document.querySelector(`[data-ascore="${CSS.escape(id)}"]`);
+          const cmtInput = document.querySelector(`[data-acmt="${CSS.escape(id)}"]`);
+          const score = Number(scoreInput?.value || 0);
+          const comment = (cmtInput?.value || "").trim();
+          const all = getAssignments();
+          all[c.id] = (all[c.id] || []).map(a => a.id === id ? { ...a, score, comment } : a);
+          setAssignments(all);
+          renderAssignments();
+        });
+      });
+    }
+  }
+
+  function renderReviews() {
+    const list = $("#reviewList");
+    if (!list) return;
+    const revs = getReviews()[c.id] || [];
+    const avg = revs.length ? (revs.reduce((s,r)=>s+(r.rating||0),0)/revs.length).toFixed(1) : "-";
+    list.innerHTML = `
+      <div class="muted" style="margin-bottom:8px;">평점: ${avg} / 5 (${revs.length}명)</div>
+      ${revs.length ? revs.map(r => `
+        <div class="session-item">
+          <div>
+            <div class="session-title">⭐ ${r.rating} · ${escapeHtml(r.userName || r.userEmail || "")}</div>
+            <div class="session-sub">${new Date(r.at).toLocaleString("ko-KR")}</div>
+            <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(r.text || "")}</div>
+          </div>
+        </div>
+      `).join("") : `<div class="muted" style="font-size:13px;">아직 리뷰가 없습니다.</div>`}
+    `;
+  }
+
+  function renderQna() {
+    const list = $("#qnaList");
+    if (!list) return;
+    const qnas = getQna()[c.id] || [];
+    list.innerHTML = qnas.length ? qnas.map(q => `
+      <div class="session-item">
+        <div>
+          <div class="session-title">${escapeHtml(q.userName || q.userEmail || "")} · ${escapeHtml(q.role || "")}</div>
+          <div class="session-sub">${new Date(q.at).toLocaleString("ko-KR")}</div>
+          <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(q.text || "")}</div>
+          <div style="margin-top:8px; display:grid; gap:6px;">
+            ${(q.replies || []).map(r => `
+              <div class="session-sub" style="background:rgba(15,23,42,.04); padding:6px 8px; border-radius:10px;">
+                <strong>${escapeHtml(r.userName || r.userEmail || "")} · ${escapeHtml(r.role || "")}</strong><br/>
+                ${escapeHtml(r.text || "")} <span style="color:var(--muted2);">(${new Date(r.at).toLocaleString("ko-KR")})</span>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <input class="input" data-qreply="${escapeAttr(q.id)}" placeholder="댓글 입력" style="width:180px;">
+          <button class="btn" data-qreplybtn="${escapeAttr(q.id)}">답변</button>
+        </div>
+      </div>
+    `).join("") : `<div class="muted" style="font-size:13px;">등록된 질문이 없습니다.</div>`;
+
+    $$("[data-qreplybtn]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (!user) { alert("로그인이 필요합니다."); return; }
+        const qid = btn.getAttribute("data-qreplybtn");
+        const inp = document.querySelector(`[data-qreply="${CSS.escape(qid)}"]`);
+        const text = (inp?.value || "").trim();
+        if (!text) return;
+        const all = getQna();
+        all[c.id] = (all[c.id] || []).map(q => q.id === qid ? {
+          ...q,
+          replies: [ ...(q.replies||[]), { userEmail: user.email, userName: user.name, role: user.role, text, at: new Date().toISOString() } ]
+        } : q);
+        setQna(all);
+        renderQna();
+      });
+    });
+  }
+
+  // 자료 업로드 (선생님만)
+  const matForm = $("#materialFormWrap");
+  if (matForm) matForm.style.display = (user?.role === "teacher" && user?.name === c.teacher) ? "block" : "none";
+  $("#matUploadBtn")?.addEventListener("click", () => {
+    if (!(user?.role === "teacher" && user?.name === c.teacher)) return;
+    const title = ($("#matTitle")?.value || "").trim();
+    const file = $("#matFile")?.files?.[0] || null;
+    if (!title || !file) { alert("제목과 파일을 입력하세요."); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const mats = getMaterials();
+      mats[c.id] = mats[c.id] || [];
+      mats[c.id].push({
+        id: "m_" + Date.now(),
+        title,
+        url: String(reader.result || ""),
+        author: user.name || user.email,
+        at: new Date().toISOString()
+      });
+      setMaterials(mats);
+      renderMaterials();
+      $("#matTitle").value = "";
+      $("#matFile").value = "";
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // 과제 제출 (학생만)
+  const assignForm = $("#assignFormWrap");
+  if (assignForm) assignForm.style.display = (user?.role === "student") ? "block" : "none";
+  $("#assignSubmitBtn")?.addEventListener("click", () => {
+    if (!user || user.role !== "student") return;
+    const metaMap = getAssignMeta();
+    const assignList = Array.isArray(metaMap[c.id]) ? metaMap[c.id] : [];
+    const select = document.getElementById("assignSelect");
+    const currentAssignId = select?.value || (assignList[assignList.length - 1]?.id);
+    if (!currentAssignId) { alert("등록된 과제가 없습니다."); return; }
+    const meta = assignList.find(a => a.id === currentAssignId) || {};
+    if (meta?.dueAt && Date.now() > Date.parse(meta.dueAt)) {
+      alert("제출 기한이 지났습니다.");
+      return;
+    }
+    const text = ($("#assignText")?.value || "").trim();
+    const file = $("#assignFile")?.files?.[0] || null;
+    if (!text && !file) { alert("제출 내용 또는 파일을 입력하세요."); return; }
+
+    const saveAssignment = (fileData, fileName) => {
+      const assigns = getAssignments();
+      assigns[c.id] = assigns[c.id] || [];
+      const nowIso = new Date().toISOString();
+      const idx = assigns[c.id].findIndex(a => normalizeEmail(a.userEmail) === normalizeEmail(user.email));
+      const base = {
+        userEmail: user.email,
+        userName: user.name,
+        text,
+        url: null,
+        fileName: fileName || "",
+        fileData: fileData || "",
+        assignId: currentAssignId,
+      };
+      if (idx >= 0) {
+        const prev = assigns[c.id][idx];
+        assigns[c.id][idx] = {
+          ...prev,
+          ...base,
+          submittedAt: prev.submittedAt || prev.at || nowIso,
+          updatedAt: nowIso
+        };
+      } else {
+        assigns[c.id].push({
+          id: "a_" + Date.now(),
+          ...base,
+          submittedAt: nowIso,
+          updatedAt: null,
+          at: nowIso
+        });
+      }
+      setAssignments(assigns);
+      $("#assignText").value = "";
+      if ($("#assignFile")) $("#assignFile").value = "";
+      renderAssignments();
+    };
+
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => saveAssignment(String(reader.result || ""), file.name);
+      reader.readAsDataURL(file);
+    } else {
+      saveAssignment("", "");
+    }
+  });
+
+  // 리뷰 작성 (학생, 수강중만)
+  const reviewForm = $("#reviewFormWrap");
+  const canReview = user?.role === "student" && isEnrollmentActiveForUser(user, c.id);
+  if (!reviewForm && $("#reviewList")?.parentElement && canReview) {
+    const wrap = document.createElement("div");
+    wrap.id = "reviewFormWrap";
+    wrap.style.marginTop = "12px";
+    wrap.innerHTML = `
+      <div class="field">
+        <label>별점 (1-5)</label>
+        <input id="reviewRating" class="input" type="number" min="1" max="5" value="5" />
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <label>리뷰 내용</label>
+        <textarea id="reviewText" placeholder="후기를 남겨주세요."></textarea>
+      </div>
+      <button class="btn primary" id="reviewSubmitBtn" style="margin-top:10px;">리뷰 남기기</button>
+    `;
+    $("#reviewList")?.parentElement?.insertBefore(wrap, $("#reviewList"));
+  }
+  const reviewFormNow = $("#reviewFormWrap");
+  if (reviewFormNow) reviewFormNow.style.display = canReview ? "block" : "none";
+  const reviewBtn = $("#reviewSubmitBtn");
+  if (reviewBtn && !reviewBtn.dataset.bound) {
+    reviewBtn.dataset.bound = "1";
+    reviewBtn.addEventListener("click", () => {
+    if (!canReview) return;
+    const rating = Number($("#reviewRating")?.value || 5);
+    const text = ($("#reviewText")?.value || "").trim();
+    const revs = getReviews();
+    revs[c.id] = revs[c.id] || [];
+    const emailKey = normalizeEmail(user.email);
+    const now = new Date().toISOString();
+    const idx = revs[c.id].findIndex(r => normalizeEmail(r.userEmail) === emailKey);
+    const payload = {
+      id: idx >= 0 ? revs[c.id][idx].id : "rv_" + Date.now(),
+      userEmail: user.email,
+      userName: user.name,
+      rating,
+      text,
+      at: now
+    };
+    if (idx >= 0) {
+      revs[c.id][idx] = payload;
+      alert("기존 리뷰를 업데이트했습니다.");
+    } else {
+      revs[c.id].push(payload);
+    }
+    setReviews(revs);
+    $("#reviewText").value = "";
+    renderReviews();
+  });
+  }
+
+  // Q&A 작성 (로그인 필요)
+  const qnaForm = $("#qnaFormWrap");
+  if (qnaForm) qnaForm.style.display = user ? "block" : "none";
+  $("#qnaSubmitBtn")?.addEventListener("click", () => {
+    if (!user) { alert("로그인이 필요합니다."); return; }
+    const text = ($("#qnaText")?.value || "").trim();
+    if (!text) return;
+    const all = getQna();
+    all[c.id] = all[c.id] || [];
+    all[c.id].push({
+      id: "q_" + Date.now(),
+      userEmail: user.email,
+      userName: user.name,
+      role: user.role,
+      text,
+      replies: [],
+      at: new Date().toISOString()
+    });
+    setQna(all);
+    $("#qnaText").value = "";
+    renderQna();
+  });
+
+  renderMaterials();
+  renderAssignments();
+  renderReviews();
+  renderQna();
 }
 
 function renderReplaysList(classId) {
@@ -2437,6 +2976,14 @@ function loadLivePage() {
     stopAllStreams();
     location.href = `class_detail.html?id=${encodeURIComponent(classId)}`;
   });
+
+  // 출석 로그(학생 활성 수강자만)
+  if (user?.role === "student" && activeStudent) {
+    const att = getAttendance();
+    att[classId] = att[classId] || [];
+    att[classId].push({ email: user.email, at: new Date().toISOString() });
+    setAttendance(att);
+  }
 }
 
 // ---------------------------
