@@ -1785,9 +1785,10 @@ function loadClassDetailPage() {
         if (myAssign) {
           const submitted = myAssign.submittedAt || myAssign.at;
           const updated = myAssign.updatedAt ? ` / 수정: ${new Date(myAssign.updatedAt).toLocaleString("ko-KR")}` : "";
-          statusEl.textContent = `제출 완료 (${new Date(submitted).toLocaleString("ko-KR")}${updated}) · ${dueTxt}`;
+          const titleTxt = assignMap[myAssign.assignId || selectedAssignId || ""]?.title || "과제";
+          statusEl.textContent = `${titleTxt} 제출 완료 (${new Date(submitted).toLocaleString("ko-KR")}${updated}) · ${dueTxt}`;
         } else {
-          statusEl.textContent = `아직 제출하지 않았습니다. ${dueTxt}`;
+          statusEl.textContent = `선택된 과제: ${assignMap[selectedAssignId || latestAssignId || ""]?.title || "과제"} · ${dueTxt}`;
         }
       }
     }
@@ -1808,7 +1809,13 @@ function loadClassDetailPage() {
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <strong>과제 설정</strong>
             <input type="text" id="assignTitleInput" class="input" style="width:220px;" placeholder="과제명" value="${escapeAttr(meta.title || "")}">
-            <input type="datetime-local" id="assignDueInput" class="input" style="width:200px;" step="60" min="2000-01-01T00:00" value="${dueVal}">
+            <input type="date" id="assignDueDate" class="input" style="width:160px;">
+            <select id="assignDueHour" class="input" style="width:90px;">
+              ${Array.from({length:24},(_,i)=>`<option value="${i}">${String(i).padStart(2,"0")}시</option>`).join("")}
+            </select>
+            <select id="assignDueMin" class="input" style="width:90px;">
+              ${["00","10","20","30","40","50"].map(m=>`<option value="${Number(m)}">${m}분</option>`).join("")}
+            </select>
             <button class="btn" id="assignDueSave">저장</button>
             <button class="btn" id="assignDueClear">초기화</button>
           </div>
@@ -1817,33 +1824,49 @@ function loadClassDetailPage() {
         </div>
         <div id="assignListMeta" style="margin-top:8px;"></div>
       `;
-      const dueInputEl = document.getElementById("assignDueInput");
-      // 마우스 휠로 시간/분이 계속 순환되는 것을 방지
-      if (dueInputEl) {
-        dueInputEl.addEventListener("wheel", (e) => { e.preventDefault(); }, { passive: false });
-      }
-      // 선택된 과제 내용을 설정 폼에 반영 (편집 중이 아닐 때)
-      if (!metaBox.dataset.editing) {
-        const t = document.getElementById("assignTitleInput");
-        const d = document.getElementById("assignDescInput");
-        const due = document.getElementById("assignDueInput");
-        if (t) t.value = meta?.title || "";
-        if (d) d.value = meta?.desc || "";
-        if (due) due.value = meta?.dueAt || "";
+      const t = document.getElementById("assignTitleInput");
+      const d = document.getElementById("assignDescInput");
+      const dueDate = document.getElementById("assignDueDate");
+      const dueHour = document.getElementById("assignDueHour");
+      const dueMin = document.getElementById("assignDueMin");
+      if (t) t.value = meta?.title || "";
+      if (d) d.value = meta?.desc || "";
+      if (dueDate && dueHour && dueMin) {
+        if (meta?.dueAt) {
+          const dt = new Date(meta.dueAt);
+          dueDate.value = dt.toISOString().slice(0,10);
+          dueHour.value = dt.getHours();
+          const m = dt.getMinutes();
+          dueMin.value = [0,10,20,30,40,50].includes(m) ? m : 0;
+        } else {
+          dueDate.value = "";
+          dueHour.value = "23";
+          dueMin.value = "50";
+        }
       }
       document.getElementById("assignDueSave")?.addEventListener("click", () => {
-        const v = document.getElementById("assignDueInput")?.value || "";
+        const dateStr = document.getElementById("assignDueDate")?.value || "";
+        const hourStr = document.getElementById("assignDueHour")?.value || "0";
+        const minStr = document.getElementById("assignDueMin")?.value || "0";
+        let dueIso = null;
+        if (dateStr) {
+          const [y,m,dv] = dateStr.split("-").map(Number);
+          const hh = Number(hourStr);
+          const mm = Number(minStr);
+          const dt = new Date(y, (m||1)-1, dv||1, hh||0, mm||0, 0, 0);
+          dueIso = dt.toISOString();
+        }
         const title = (document.getElementById("assignTitleInput")?.value || "").trim();
         const desc = (document.getElementById("assignDescInput")?.value || "").trim();
         const metaAll2 = getAssignMeta();
         let listArr = Array.isArray(metaAll2[c.id]) ? metaAll2[c.id] : [];
         const editId = metaBox.dataset.editing || null;
         if (editId) {
-          listArr = listArr.map(m => m.id === editId ? { ...m, title, desc, dueAt: v || null, updatedAt: new Date().toISOString() } : m);
+          listArr = listArr.map(m => m.id === editId ? { ...m, title, desc, dueAt: dueIso, updatedAt: new Date().toISOString() } : m);
           assignPendingSelect = editId;
         } else {
           const newId = "asg_" + Date.now();
-          listArr.push({ id: newId, title, desc, dueAt: v || null, createdAt: new Date().toISOString(), updatedAt: null });
+          listArr.push({ id: newId, title, desc, dueAt: dueIso, createdAt: new Date().toISOString(), updatedAt: null });
           assignPendingSelect = newId;
         }
         metaBox.dataset.editing = "";
@@ -1853,10 +1876,21 @@ function loadClassDetailPage() {
         if (!metaBox.dataset.editing) {
           const t = document.getElementById("assignTitleInput");
           const d = document.getElementById("assignDescInput");
-          const due = document.getElementById("assignDueInput");
+          const dueD = document.getElementById("assignDueDate");
+          const dueH = document.getElementById("assignDueHour");
+          const dueM = document.getElementById("assignDueMin");
           if (t) t.value = title;
           if (d) d.value = desc;
-          if (due) due.value = v;
+          if (dueD && dueH && dueM) {
+            if (dueIso) {
+              const dt = new Date(dueIso);
+              dueD.value = dt.toISOString().slice(0,10);
+              dueH.value = dt.getHours();
+              dueM.value = [0,10,20,30,40,50].includes(dt.getMinutes()) ? dt.getMinutes() : 0;
+            } else {
+              dueD.value = "";
+            }
+          }
         }
         renderAssignments();
       });
@@ -1865,10 +1899,14 @@ function loadClassDetailPage() {
         assignPendingSelect = null;
         const t = document.getElementById("assignTitleInput");
         const d = document.getElementById("assignDescInput");
-        const due = document.getElementById("assignDueInput");
+        const dueD = document.getElementById("assignDueDate");
+        const dueH = document.getElementById("assignDueHour");
+        const dueM = document.getElementById("assignDueMin");
         if (t) t.value = "";
         if (d) d.value = "";
-        if (due) due.value = "";
+        if (dueD) dueD.value = "";
+        if (dueH) dueH.value = "0";
+        if (dueM) dueM.value = "0";
       });
 
       // 과제 목록(설정/수정)
@@ -1930,7 +1968,37 @@ function loadClassDetailPage() {
     }
 
     if (!isOwnerTeacher) {
-      list.innerHTML = `<div class="muted" style="font-size:13px;">제출한 과제는 선생님만 확인할 수 있습니다.</div>`;
+      // 학생 화면: 본인 제출만 보여주기
+      if (myAssign) {
+        list.innerHTML = `
+          <div class="muted" style="margin-bottom:6px;">제출한 과제는 선생님만 확인할 수 있습니다.</div>
+          <div class="session-item" style="border-left:3px solid rgba(109,94,252,.35);">
+            <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+              <div class="session-title">${escapeHtml(assignMap[myAssign.assignId || selectedAssignId || ""]?.title || "제출함")}</div>
+              <span class="chip" style="background:rgba(109,94,252,.14);">내 제출</span>
+            </div>
+            <div class="session-sub">제출: ${new Date(myAssign.submittedAt || myAssign.at).toLocaleString("ko-KR")}${myAssign.updatedAt ? ` / 수정: ${new Date(myAssign.updatedAt).toLocaleString("ko-KR")}` : ""}</div>
+            <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(myAssign.text || "")}</div>
+            ${myAssign.url ? `<div class="session-sub"><a href="${escapeAttr(myAssign.url)}" target="_blank">링크 열기</a></div>` : ``}
+            ${myAssign.fileName && myAssign.fileData ? `<div class="session-sub"><a href="${escapeAttr(myAssign.fileData)}" download="${escapeAttr(myAssign.fileName)}">첨부파일 다운로드 (${escapeHtml(myAssign.fileName)})</a></div>` : ``}
+            <div style="margin-top:8px;">
+              <button class="btn" id="assignEditMine">수정</button>
+            </div>
+          </div>
+        `;
+        // 내 제출 수정: 폼에 값 채워서 다시 제출할 수 있게
+        $("#assignEditMine")?.addEventListener("click", () => {
+          const sel = document.getElementById("assignSelect");
+          if (sel && myAssign.assignId) sel.value = myAssign.assignId;
+          const txt = document.getElementById("assignText");
+          if (txt) txt.value = myAssign.text || "";
+          const status = document.getElementById("assignStatus");
+          if (status) status.textContent = "수정 후 다시 제출 버튼을 눌러주세요.";
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        });
+      } else {
+        list.innerHTML = `<div class="muted" style="font-size:13px;">제출한 과제가 없습니다. 제출 후에는 선생님만 전체 목록을 볼 수 있습니다.</div>`;
+      }
       return;
     }
 
