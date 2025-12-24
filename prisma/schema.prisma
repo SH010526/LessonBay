@@ -1,0 +1,228 @@
+// LessonBay Prisma schema (Postgres)
+// Mirrors Supabase Auth users via id/email; role/name from user_metadata
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  student
+  teacher
+}
+
+enum PlanType {
+  weekly
+  monthly
+}
+
+enum EnrollmentStatus {
+  active
+  expired
+  cancelled
+}
+
+model User {
+  id        String   @id // Supabase auth user id
+  email     String   @unique
+  name      String
+  role      Role     @default(student)
+  createdAt DateTime @default(now())
+
+  classes      Class[]             @relation("TeacherClasses")
+  enrollments  Enrollment[]
+  reviews      Review[]
+  qnas         Qna[]
+  qnaComments  QnaComment[]
+  chatMessages ChatMessage[]
+  submissions  AssignmentSubmission[]
+  materials    Material[]
+  progresses   Progress[]
+  attendance   Attendance[]
+}
+
+model Class {
+  id           String      @id @default(cuid())
+  title        String
+  category     String?
+  description  String?
+  weeklyPrice  Int
+  monthlyPrice Int
+  thumbUrl     String?
+  teacherId    String
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  teacher      User        @relation("TeacherClasses", fields: [teacherId], references: [id])
+  enrollments  Enrollment[]
+  sessions     Session[]
+  replays      Replay[]
+  materials    Material[]
+  assignments  Assignment[]
+  reviews      Review[]
+  qnas         Qna[]
+  attendance   Attendance[]
+  chatMessages ChatMessage[]
+  progresses   Progress[]
+}
+
+model Enrollment {
+  id         String            @id @default(cuid())
+  userId     String
+  classId    String
+  planType   PlanType
+  duration   Int
+  paidAmount Int
+  endAt      DateTime
+  status     EnrollmentStatus
+  createdAt  DateTime          @default(now())
+
+  user       User              @relation(fields: [userId], references: [id])
+  class      Class             @relation(fields: [classId], references: [id])
+
+  @@unique([userId, classId])
+}
+
+model Session {
+  id        String         @id @default(cuid())
+  classId   String
+  title     String?
+  startsAt  DateTime?
+  endsAt    DateTime?
+
+  class     Class          @relation(fields: [classId], references: [id])
+  replays   Replay[]
+  chat      ChatMessage[]
+  attendance Attendance[]
+}
+
+model Replay {
+  id        String   @id @default(cuid())
+  classId   String
+  sessionId String?
+  title     String?
+  vodUrl    String
+  mime      String?
+  createdAt DateTime @default(now())
+
+  class     Class    @relation(fields: [classId], references: [id])
+  session   Session? @relation(fields: [sessionId], references: [id])
+}
+
+model Material {
+  id         String   @id @default(cuid())
+  classId    String
+  title      String
+  fileUrl    String
+  mime       String?
+  uploaderId String?
+  createdAt  DateTime @default(now())
+
+  class      Class    @relation(fields: [classId], references: [id])
+  uploader   User?    @relation(fields: [uploaderId], references: [id])
+}
+
+model Assignment {
+  id          String      @id @default(cuid())
+  classId     String
+  title       String
+  description String?
+  dueAt       DateTime?
+  createdAt   DateTime    @default(now())
+
+  class       Class       @relation(fields: [classId], references: [id])
+  submissions AssignmentSubmission[]
+}
+
+model AssignmentSubmission {
+  id           String    @id @default(cuid())
+  assignmentId String
+  studentId    String
+  content      String?
+  fileUrl      String?
+  score        Int?
+  feedback     String?
+  submittedAt  DateTime  @default(now())
+  gradedAt     DateTime?
+
+  assignment   Assignment @relation(fields: [assignmentId], references: [id])
+  student      User       @relation(fields: [studentId], references: [id])
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  classId   String
+  userId    String
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+
+  class     Class    @relation(fields: [classId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([classId, userId])
+}
+
+model Qna {
+  id        String       @id @default(cuid())
+  classId   String
+  userId    String
+  question  String
+  createdAt DateTime     @default(now())
+
+  class     Class        @relation(fields: [classId], references: [id])
+  user      User         @relation(fields: [userId], references: [id])
+  comments  QnaComment[]
+}
+
+model QnaComment {
+  id        String   @id @default(cuid())
+  qnaId     String
+  userId    String
+  comment   String
+  createdAt DateTime @default(now())
+
+  qna       Qna      @relation(fields: [qnaId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Attendance {
+  id        String    @id @default(cuid())
+  classId   String
+  sessionId String?
+  userId    String
+  joinedAt  DateTime  @default(now())
+
+  class     Class     @relation(fields: [classId], references: [id])
+  session   Session?  @relation(fields: [sessionId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  classId   String
+  sessionId String?
+  userId    String
+  message   String
+  sentAt    DateTime @default(now())
+
+  class     Class    @relation(fields: [classId], references: [id])
+  session   Session? @relation(fields: [sessionId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Progress {
+  id        String   @id @default(cuid())
+  classId   String
+  userId    String
+  percent   Int
+  updatedAt DateTime @default(now())
+
+  class     Class    @relation(fields: [classId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([classId, userId])
+}

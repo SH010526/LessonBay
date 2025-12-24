@@ -23,16 +23,94 @@ const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
 
 // ? SDK가 없는 페이지에서도 크래시 나지 않게 (전역 supabase와 이름 충돌 방지)
 let supabaseClient = null;
-try {
-  if (typeof window !== "undefined" && window.supabase && typeof window.supabase.createClient === "function") {
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+function ensureSupabaseClient() {
+  if (supabaseClient) return supabaseClient;
+  try {
+    if (typeof window !== "undefined" && window.supabase && typeof window.supabase.createClient === "function") {
+      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+    }
+  } catch (e) {
+    supabaseClient = null;
   }
-} catch (e) {
-  supabaseClient = null;
+  return supabaseClient;
 }
+ensureSupabaseClient();
 
 // OTP 백엔드 API
 const API_BASE_URL = "http://localhost:3000";
+
+// In-memory caches (no localStorage/IndexedDB)
+let userCache = null;
+const dataCache = {
+  classes: [],
+  enrollments: {},   // userKey -> classId -> record
+  replays: {},       // classId -> [replay]
+  chat: {},          // classId -> [messages]
+  materials: {},     // classId -> [materials]
+  assignments: {},   // classId -> [assignments + submissions]
+  assignMeta: {},    // legacy compatibility, kept empty
+  reviews: {},       // classId -> [reviews]
+  qna: {},           // classId -> [questions with comments]
+  attendance: {},    // classId -> [rows]
+  progress: {},      // classId -> [rows]
+};
+
+// API helper
+async function apiHeaders() {
+  let token = "";
+  try {
+    const { data } = await supabaseClient.auth.getSession();
+    token = data?.session?.access_token || "";
+  } catch (_) {}
+  const h = { "Content-Type": "application/json" };
+  if (token) h.Authorization = `Bearer ${token}`;
+  return h;
+}
+
+async function apiGet(path) {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    headers: await apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function apiPost(path, body) {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: await apiHeaders(),
+    body: JSON.stringify(body || {}),
+  });
+  if (res.ok) return res.json();
+
+  // 응답 본문은 한 번만 소비 가능하므로 text로 읽고 JSON 시도
+  const raw = await res.text();
+  try {
+    const data = raw ? JSON.parse(raw) : null;
+    const msg = data?.detail || data?.error || raw || "알 수 없는 오류";
+    throw new Error(msg);
+  } catch (_) {
+    throw new Error(raw || "알 수 없는 오류");
+  }
+}
+
+// generic request (for DELETE 등)
+async function apiRequest(path, method = "GET", body = null) {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    headers: await apiHeaders(),
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.ok) return res.json();
+  const raw = await res.text();
+  try {
+    const data = raw ? JSON.parse(raw) : null;
+    const msg = data?.detail || data?.error || raw || "알 수 없는 오류";
+    throw new Error(msg);
+  } catch (_) {
+    throw new Error(raw || "알 수 없는 오류");
+  }
+}
 
 const FALLBACK_THUMB =
   "https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=1400&q=60";
@@ -54,17 +132,14 @@ const K = {
   SEEDED: "lc_seeded_v1",
 };
 
-// ? VOD(녹화) 저장소: IndexedDB
-const VOD_DB = {
-  NAME: "lc_vod_db",
-  STORE: "vods",
-  VER: 1,
-};
+// ? VOD(녹화) 저장소: 메모리 (IndexedDB 사용 안 함)
+const VOD_MEM = new Map(); // vodKey -> Blob
 
 /* ============================
    ? Supabase session -> local user sync
    ============================ */
 async function syncLocalUserFromSupabaseSession() {
+  ensureSupabaseClient();
   if (!supabaseClient) return;
 
   try {
@@ -73,9 +148,7 @@ async function syncLocalUserFromSupabaseSession() {
 
     const session = data?.session || null;
     if (!session || !session.user) {
-      // Supabase 기준으로 로그아웃이면, 앱 로컬 user도 정리
-      // (메일 인증 전/세션 만료 등에서 UI가 꼬이지 않게)
-      localStorage.removeItem(K.USER);
+      userCache = null;
       return;
     }
 
@@ -86,117 +159,53 @@ async function syncLocalUserFromSupabaseSession() {
       ? u.user_metadata.role
       : "student";
 
-    // 기존 앱이 기대하는 user 형태로 저장
-    const local = { id: u.id, name, role, email };
-    localStorage.setItem(K.USER, JSON.stringify(local));
+    userCache = { id: u.id, name, role, email };
   } catch (_) {
     // ignore
   }
 }
 
 async function supabaseSignupWithEmailConfirm(name, email, password, role) {
-  if (!supabaseClient) {
-    alert("Supabase SDK가 로드되지 않았습니다. (signup.html에서 SDK 스크립트 순서를 확인하세요)");
-    return;
-  }
-
-  const redirectTo = `${location.origin}/index.html`;
-
-  const { data, error } = await supabaseClient.auth.signUp({
+  // OTP 방식: 서버로 6자리 코드 발송 요청
+  return apiPost("/api/auth/send-otp", {
+    name,
     email,
     password,
-    options: {
-      emailRedirectTo: redirectTo,
-      data: {
-        name,
-        role: (role === "teacher" ? "teacher" : "student"),
-      },
-    },
+    role: role === "teacher" ? "teacher" : "student",
   });
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  // 이메일 확인이 켜져 있으면 보통 session은 null
-  // (메일 인증 완료 후 로그인 페이지에서 로그인)
-  alert("인증메일을 보냈습니다. 메일에서 링크를 누른 뒤 로그인하세요.");
-  location.href = "login.html";
 }
 
 async function supabaseLogin(email, password) {
-  if (!supabaseClient) {
-    alert("Supabase SDK가 로드되지 않았습니다. (login.html에서 SDK 스크립트 순서를 확인하세요)");
-    return;
-  }
+  ensureSupabaseClient();
+  if (!supabaseClient) throw new Error("Supabase SDK가 로드되지 않았습니다. (login.html에서 SDK 스크립트 순서를 확인하세요)");
 
   const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
   if (error) {
-    alert(error.message);
-    return;
+    throw error;
   }
 
   // 로그인 성공 -> 로컬 user 동기화
   await syncLocalUserFromSupabaseSession();
-
-  alert("로그인 성공!");
-  location.href = "index.html";
+  return data;
 }
 
 /* ============================
    기존 코드 시작 (원본 유지)
    ============================ */
 
-function openVodDB() {
-  return new Promise((resolve, reject) => {
-    if (!("indexedDB" in window)) {
-      reject(new Error("IndexedDB not supported"));
-      return;
-    }
-    const req = indexedDB.open(VOD_DB.NAME, VOD_DB.VER);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(VOD_DB.STORE)) {
-        db.createObjectStore(VOD_DB.STORE);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
 async function vodPut(vodKey, blob) {
-  const db = await openVodDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(VOD_DB.STORE, "readwrite");
-    const store = tx.objectStore(VOD_DB.STORE);
-    const r = store.put(blob, vodKey);
-    r.onsuccess = () => resolve(true);
-    r.onerror = () => reject(r.error);
-  });
+  if (!vodKey || !blob) return false;
+  VOD_MEM.set(vodKey, blob);
+  return true;
 }
 
 async function vodGet(vodKey) {
-  const db = await openVodDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(VOD_DB.STORE, "readonly");
-    const store = tx.objectStore(VOD_DB.STORE);
-    const r = store.get(vodKey);
-    r.onsuccess = () => resolve(r.result || null);
-    r.onerror = () => reject(r.error);
-  });
+  return VOD_MEM.get(vodKey) || null;
 }
 
 async function vodDelete(vodKey) {
-  const db = await openVodDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(VOD_DB.STORE, "readwrite");
-    const store = tx.objectStore(VOD_DB.STORE);
-    const r = store.delete(vodKey);
-    r.onsuccess = () => resolve(true);
-    r.onerror = () => reject(r.error);
-  });
+  VOD_MEM.delete(vodKey);
+  return true;
 }
 
 // ============================
@@ -344,6 +353,18 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 function escapeAttr(s) { return escapeHtml(s); }
+async function blobToDataUrl(blob) {
+  return await new Promise((resolve, reject) => {
+    try {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ""));
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
 function normalizeEmail(email) { return String(email || "").trim().toLowerCase(); }
 
 // ---------------------------
@@ -374,49 +395,20 @@ function setBtnLoading(btn, loading, loadingText = "처리중...", idleText = nu
 // ? STORAGE MIGRATION
 // ---------------------------
 function migrateStorage() {
-  if (!localStorage.getItem(K.USER)) {
-    for (const key of OLD_USER_KEYS) {
-      const v = localStorage.getItem(key);
-      if (v) { localStorage.setItem(K.USER, v); break; }
-    }
-  }
-  if (!localStorage.getItem(K.USERS)) {
-    for (const key of OLD_USERS_KEYS) {
-      const v = localStorage.getItem(key);
-      if (v) { localStorage.setItem(K.USERS, v); break; }
-    }
-  }
-  if (!localStorage.getItem(K.CLASSES)) {
-    for (const key of OLD_CLASSES_KEYS) {
-      const v = localStorage.getItem(key);
-      if (v) { localStorage.setItem(K.CLASSES, v); break; }
-    }
-  }
-  if (!localStorage.getItem(K.ENROLL)) {
-    for (const key of OLD_ENROLL_KEYS) {
-      const v = localStorage.getItem(key);
-      if (v) { localStorage.setItem(K.ENROLL, v); break; }
-    }
-  }
+  // no-op (localStorage 미사용)
 }
 
 function getUserPassword(u) {
   return String((u && (u.pw ?? u.password ?? u.pass ?? u.pwd ?? "")) || "");
 }
 
-function getUser() {
-  const raw = localStorage.getItem(K.USER);
-  return raw ? safeParse(raw, null) : null;
-}
-function setUser(u) {
-  if (!u) localStorage.removeItem(K.USER);
-  else localStorage.setItem(K.USER, JSON.stringify(u));
-}
-function getUsers() { return safeParse(localStorage.getItem(K.USERS) || "[]", []); }
-function setUsers(list) { localStorage.setItem(K.USERS, JSON.stringify(list)); }
+function getUser() { return userCache; }
+function setUser(u) { userCache = u || null; }
+function getUsers() { return []; }
+function setUsers(_list) { /* no-op */ }
 
-function getClasses() { return safeParse(localStorage.getItem(K.CLASSES) || "[]", []); }
-function setClasses(list) { localStorage.setItem(K.CLASSES, JSON.stringify(list)); }
+function getClasses() { return dataCache.classes; }
+function setClasses(list) { dataCache.classes = Array.isArray(list) ? list : []; }
 
 // ===== Enrollment storage: keep as OBJECT-MAP (userKey -> classId -> record) =====
 function convertEnrollmentArrayToMap(arr) {
@@ -455,44 +447,35 @@ function convertEnrollmentArrayToMap(arr) {
   return map;
 }
 
-function getEnrollments() {
-  const data = safeParse(localStorage.getItem(K.ENROLL) || "{}", {});
-  if (Array.isArray(data)) {
-    const converted = convertEnrollmentArrayToMap(data);
-    localStorage.setItem(K.ENROLL, JSON.stringify(converted));
-    return converted;
-  }
-  if (!data || typeof data !== "object") return {};
-  return data;
-}
+function getEnrollments() { return dataCache.enrollments; }
 function setEnrollments(v) {
   let out = v;
   if (Array.isArray(out)) out = convertEnrollmentArrayToMap(out);
   if (!out || typeof out !== "object") out = {};
-  localStorage.setItem(K.ENROLL, JSON.stringify(out));
+  dataCache.enrollments = out;
 }
 
-function getReplays() { return safeParse(localStorage.getItem(K.REPLAY) || "{}", {}); }
-function setReplays(v) { localStorage.setItem(K.REPLAY, JSON.stringify(v)); }
+function getReplays() { return dataCache.replays; }
+function setReplays(v) { dataCache.replays = v || {}; }
 
-function getChat() { return safeParse(localStorage.getItem(K.CHAT) || "{}", {}); }
-function setChat(v) { localStorage.setItem(K.CHAT, JSON.stringify(v)); }
+function getChat() { return dataCache.chat; }
+function setChat(v) { dataCache.chat = v || {}; }
 
 // 자료/과제/리뷰/Q&A/출결/진도
-function getMaterials() { return safeParse(localStorage.getItem(K.MATERIALS) || "{}", {}); }
-function setMaterials(v) { localStorage.setItem(K.MATERIALS, JSON.stringify(v)); }
-function getAssignments() { return safeParse(localStorage.getItem(K.ASSIGN) || "{}", {}); }
-function setAssignments(v) { localStorage.setItem(K.ASSIGN, JSON.stringify(v)); }
-function getAssignMeta() { return safeParse(localStorage.getItem(K.ASSIGN_META) || "{}", {}); }
-function setAssignMeta(v) { localStorage.setItem(K.ASSIGN_META, JSON.stringify(v || {})); }
-function getReviews() { return safeParse(localStorage.getItem(K.REVIEWS) || "{}", {}); }
-function setReviews(v) { localStorage.setItem(K.REVIEWS, JSON.stringify(v)); }
-function getQna() { return safeParse(localStorage.getItem(K.QNA) || "{}", {}); }
-function setQna(v) { localStorage.setItem(K.QNA, JSON.stringify(v)); }
-function getAttendance() { return safeParse(localStorage.getItem(K.ATTEND) || "{}", {}); }
-function setAttendance(v) { localStorage.setItem(K.ATTEND, JSON.stringify(v)); }
-function getProgress() { return safeParse(localStorage.getItem(K.PROGRESS) || "{}", {}); }
-function setProgress(v) { localStorage.setItem(K.PROGRESS, JSON.stringify(v)); }
+function getMaterials() { return dataCache.materials; }
+function setMaterials(v) { dataCache.materials = v || {}; }
+function getAssignments() { return dataCache.assignments; }
+function setAssignments(v) { dataCache.assignments = v || {}; }
+function getAssignMeta() { return dataCache.assignMeta; }
+function setAssignMeta(v) { dataCache.assignMeta = v || {}; }
+function getReviews() { return dataCache.reviews; }
+function setReviews(v) { dataCache.reviews = v || {}; }
+function getQna() { return dataCache.qna; }
+function setQna(v) { dataCache.qna = v || {}; }
+function getAttendance() { return dataCache.attendance; }
+function setAttendance(v) { dataCache.attendance = v || {}; }
+function getProgress() { return dataCache.progress; }
+function setProgress(v) { dataCache.progress = v || {}; }
 
 // ---------------------------
 // ? ROBUST USER KEY LIST
@@ -609,105 +592,67 @@ function isEnrollmentActiveForUser(u, classId) {
 // ---------------------------
 // ? USERS NORMALIZE/DEDUPE (legacy 유지)
 // ---------------------------
-function normalizeUsersInStorage() {
-  const raw = safeParse(localStorage.getItem(K.USERS) || "[]", []);
-  if (!Array.isArray(raw)) return;
-
-  const norm = raw.map((u) => {
-    const id = u?.id || ("u_" + Date.now() + "_" + Math.random().toString(16).slice(2));
-    const name = String(u?.name ?? u?.username ?? u?.displayName ?? "").trim();
-    const role = (u?.role === "teacher" || u?.role === "student") ? u.role : (u?.isTeacher ? "teacher" : "student");
-    const email = String(u?.email ?? "").trim();
-    const emailKey = normalizeEmail(email);
-    const pw = getUserPassword(u);
-    const createdAt = u?.createdAt || u?.created_at || new Date().toISOString();
-    return { id, name, role, email, emailKey, pw, createdAt };
-  }).filter(u => u.emailKey);
-
-  const map = new Map();
-  for (const u of norm) {
-    const prev = map.get(u.emailKey);
-    if (!prev) map.set(u.emailKey, u);
-    else {
-      const tPrev = Date.parse(prev.createdAt) || 0;
-      const tNow = Date.parse(u.createdAt) || 0;
-      map.set(u.emailKey, (tNow >= tPrev) ? u : prev);
-    }
-  }
-
-  localStorage.setItem(K.USERS, JSON.stringify(Array.from(map.values())));
-}
-
-function normalizeCurrentUserInStorage() {
-  const cu = getUser();
-  if (!cu) return;
-
-  const idOk = !!String(cu.id || "").trim();
-  const emailOk = !!normalizeEmail(cu.email || cu.emailKey || "");
-  if (idOk && emailOk) return;
-
-  const users = getUsers();
-  if (!Array.isArray(users) || !users.length) return;
-
-  const cuEmailKey = normalizeEmail(cu.email || cu.emailKey || "");
-  let found = null;
-
-  if (cuEmailKey) {
-    found = users.find(u => u.emailKey === cuEmailKey) || null;
-  }
-  if (!found) {
-    const cuNameKey = String(cu.name || "").trim().toLowerCase();
-    const cuRole = cu.role || "";
-    if (cuNameKey) {
-      const candidates = users.filter(u =>
-        String(u.name || "").trim().toLowerCase() === cuNameKey &&
-        (!cuRole || u.role === cuRole)
-      );
-      if (candidates.length) {
-        candidates.sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0));
-        found = candidates[0];
-      }
-    }
-  }
-
-  if (found) {
-    setUser({ id: found.id, name: found.name || cu.name, role: found.role || cu.role, email: found.email || cu.email });
-  }
-}
+function normalizeUsersInStorage() { /* no-op: localStorage 미사용 */ }
+function normalizeCurrentUserInStorage() { /* no-op: localStorage 미사용 */ }
 
 // ---------------------------
 // ? SEED
 // ---------------------------
 async function ensureSeedData() {
-  if (localStorage.getItem(K.SEEDED) === "1" && localStorage.getItem(K.CLASSES)) return;
+  // Supabase 세션 동기화
+  await syncLocalUserFromSupabaseSession();
+  const user = getUser();
 
-  const existing = safeParse(localStorage.getItem(K.CLASSES) || "null", null);
-  if (Array.isArray(existing) && existing.length) {
-    localStorage.setItem(K.SEEDED, "1");
-    return;
+  async function loadLocalClassesFallback() {
+    try {
+      const res = await fetch("data/classes.json", { cache: "no-cache" });
+      if (!res.ok) throw new Error("local classes fetch failed");
+      const json = await res.json();
+      const normalized = (json || []).map(c => ({
+        ...c,
+        teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
+        thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+      }));
+      setClasses(normalized);
+    } catch (err) {
+      console.error("local classes load failed", err);
+      setClasses([]);
+    }
   }
 
+  // 수업 목록 로드 (API → 비어 있으면 로컬 예제)
   try {
-    const res = await fetch("data/classes.json", { cache: "no-store" });
-    const data = await res.json();
-    localStorage.setItem(K.CLASSES, JSON.stringify(data));
-    localStorage.setItem(K.SEEDED, "1");
-  } catch {
-    const fallback = [
-      {
-        id: "c_demo_1",
-        title: "영어 회화 초급",
-        teacher: "김선생",
-        category: "영어회화",
-        description: "영어 회화를 처음 시작하는 분들을 위한 기본 표현과 발음 교정.",
-        weeklyPrice: 19000,
-        monthlyPrice: 59000,
-        thumb: FALLBACK_THUMB
-      }
-    ];
-    localStorage.setItem(K.CLASSES, JSON.stringify(fallback));
-    localStorage.setItem(K.SEEDED, "1");
+    const classes = await apiGet("/api/classes");
+    const normalized = (classes || []).map(c => ({
+      ...c,
+      teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
+      teacherId: c.teacherId || c.teacher?.id || "",
+      thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+    }));
+    setClasses(normalized);
+    if (!normalized.length) {
+      await loadLocalClassesFallback();
+    }
+  } catch (e) {
+    console.error("classes fetch failed", e);
+    await loadLocalClassesFallback();
   }
+
+  // 내 수강 정보 로드
+  if (user) {
+    try {
+      const enrollList = await apiGet("/api/me/enrollments");
+      setEnrollments(enrollList || []);
+    } catch (e) {
+      console.error("enrollments fetch failed", e);
+      setEnrollments({});
+    }
+  } else {
+    setEnrollments({});
+  }
+
+  // 세션 동기화 후 내비게이션 갱신
+  updateNav();
 }
 
 // ---------------------------
@@ -843,26 +788,15 @@ function pickValue(...ids) {
 }
 
 function localLogin(email, password) {
-  normalizeUsersInStorage();
-  const users = getUsers();
-  const emailKey = normalizeEmail(email);
-  const found = users.find(u => normalizeEmail(u.email) === emailKey);
-  if (!found) return false;
-
-  const realPw = getUserPassword(found);
-  if (String(password) !== String(realPw)) return false;
-
-  setUser({ id: found.id, name: found.name, role: found.role, email: found.email });
-  alert("로그인 성공!");
-  location.href = "index.html";
-  return true;
+  console.warn("localLogin disabled. Use Supabase auth.");
+  return false;
 }
 
 function handleSignupPage() {
   const form = $("#signupForm");
   if (!form) return;
 
-  // 메시지 영역 확보
+  // 메시지 영역
   function ensureMsgEl() {
     let msg = document.getElementById("signupMsg");
     if (!msg) {
@@ -875,90 +809,7 @@ function handleSignupPage() {
     return msg;
   }
 
-  // OTP UI
-  function showOtpUi(email, name, pw, role) {
-    const msg = ensureMsgEl();
-    msg.innerHTML = `
-      인증코드(6자리)를 이메일로 보냈습니다. 입력 후 확인을 눌러주세요.<br/>
-      <div style="margin-top:8px;">
-        <input id="otpInput" class="input" placeholder="인증번호 6자리" style="width:60%; display:inline-block; margin-right:8px;" />
-        <button id="otpVerifyBtn" class="btn">확인</button>
-      </div>
-      <div style="margin-top:10px;"><button id="otpResendBtn" class="btn">재전송</button></div>
-      <div id="otpStatus" class="muted" style="margin-top:10px; font-size:13px;"></div>
-    `;
-
-    const verifyBtn = document.getElementById("otpVerifyBtn");
-    const resendBtn = document.getElementById("otpResendBtn");
-    const statusEl = document.getElementById("otpStatus");
-    let attemptsLeft = 5;
-
-    verifyBtn?.addEventListener("click", async () => {
-      const token = (document.getElementById("otpInput")?.value || "").trim();
-      if (!token) { msg.textContent = "인증번호를 입력하세요."; return; }
-      try {
-        setBtnLoading(verifyBtn, true, "확인중...");
-        const verifyRes = await fetch(`${API_BASE_URL}/api/verify-otp`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, code: token })
-        });
-        if (!verifyRes.ok) {
-          const err = await verifyRes.json().catch(() => ({}));
-          throw new Error(err.error || "검증 실패");
-        }
-
-        const users = getUsers();
-        const newUser = {
-          id: `u_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-          name,
-          role,
-          email,
-          emailKey: normalizeEmail(email),
-          pw,
-          createdAt: new Date().toISOString()
-        };
-        users.push(newUser);
-        setUsers(users);
-        setUser({ id: newUser.id, name: newUser.name, role: newUser.role, email: newUser.email });
-
-        msg.textContent = "인증 성공! 가입이 완료되었습니다. 홈으로 이동합니다.";
-        setTimeout(() => { location.href = "index.html"; }, 1200);
-      } catch (e) {
-        attemptsLeft -= 1;
-        const text = attemptsLeft > 0
-          ? `${e?.message || "인증 실패"} (남은 시도: ${attemptsLeft}회)`
-          : "인증 실패 횟수가 초과되었습니다. 재전송 후 다시 시도하세요.";
-        if (statusEl) statusEl.textContent = text; else msg.textContent = text;
-        if (attemptsLeft <= 0 && verifyBtn) verifyBtn.disabled = true;
-      } finally {
-        setBtnLoading(verifyBtn, false);
-      }
-    });
-
-    resendBtn?.addEventListener("click", async () => {
-      try {
-        setBtnLoading(resendBtn, true, "재전송 중...");
-        const sendRes = await fetch(`${API_BASE_URL}/api/send-otp`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email })
-        });
-        if (!sendRes.ok) {
-          const err = await sendRes.json().catch(() => ({}));
-          throw new Error(err.error || "재전송 실패");
-        }
-        if (statusEl) statusEl.textContent = "인증코드를 재전송했습니다. 메일을 확인하세요.";
-        attemptsLeft = 5;
-        if (verifyBtn) verifyBtn.disabled = false;
-      } catch (e) {
-        if (statusEl) statusEl.textContent = e?.message || "재전송 실패";
-        else msg.textContent = e?.message || "재전송 실패";
-      } finally {
-        setBtnLoading(resendBtn, false);
-      }
-    });
-  }
+  let pending = null; // {name,email,pw,role}
 
   async function submitSignup(ev) {
     ev.preventDefault();
@@ -969,80 +820,113 @@ function handleSignupPage() {
     const msg = ensureMsgEl();
 
     if (!name || !email || !pw) {
-      alert("이름/이메일/비밀번호를 입력하세요.");
-      return;
-    }
-
-    normalizeUsersInStorage();
-    const users = getUsers();
-    const emailKey = normalizeEmail(email);
-    if (users.some(u => u.emailKey === emailKey)) {
-      msg.textContent = "이미 가입된 이메일입니다. 로그인하세요.";
+      msg.textContent = "이름/이메일/비밀번호를 입력하세요.";
       return;
     }
 
     const submitBtn = form.querySelector("button");
     try {
-      setBtnLoading(submitBtn, true, "전송중...");
-      const sendRes = await fetch(`${API_BASE_URL}/api/send-otp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
+      setBtnLoading(submitBtn, true, "가입중...");
+      await supabaseSignupWithEmailConfirm(name, email, pw, role);
+      pending = { name, email, pw, role };
+      msg.innerHTML = `
+        <div style="margin-top:8px;">
+          6자리 인증코드를 이메일로 보냈습니다. 아래에 입력 후 확인을 눌러주세요.
+        </div>
+        <div style="margin-top:8px;">
+          <input id="otpInput" class="input" placeholder="인증번호 6자리" style="width:60%; display:inline-block; margin-right:8px;" />
+          <button id="otpVerifyBtn" class="btn">확인</button>
+        </div>
+        <div style="margin-top:10px;"><button id="otpResendBtn" class="btn">재전송</button></div>
+        <div id="otpStatus" class="muted" style="margin-top:10px; font-size:13px;"></div>
+      `;
+
+      const verifyBtn = document.getElementById("otpVerifyBtn");
+      const resendBtn = document.getElementById("otpResendBtn");
+      const statusEl = document.getElementById("otpStatus");
+
+      verifyBtn?.addEventListener("click", async () => {
+        const code = (document.getElementById("otpInput")?.value || "").trim();
+        if (!code) { if (statusEl) statusEl.textContent = "인증번호를 입력하세요."; return; }
+        try {
+          setBtnLoading(verifyBtn, true, "확인중...");
+          await apiPost("/api/auth/verify-otp", { email, code });
+          // 계정 생성됨 -> 로그인
+          await supabaseLogin(email, pw);
+          statusEl.textContent = "가입 및 로그인 완료! 잠시 후 이동합니다.";
+          setTimeout(() => { location.href = "index.html"; }, 500);
+        } catch (e) {
+          statusEl.textContent = e?.message || "인증 실패";
+        } finally {
+          setBtnLoading(verifyBtn, false);
+        }
       });
-      if (!sendRes.ok) {
-        const err = await sendRes.json().catch(() => ({}));
-        throw new Error(err.error || "인증메일 전송 실패");
-      }
-      showOtpUi(email, name, pw, role);
+
+      resendBtn?.addEventListener("click", async () => {
+        if (!pending) return;
+        try {
+          setBtnLoading(resendBtn, true, "재전송 중...");
+          await supabaseSignupWithEmailConfirm(pending.name, pending.email, pending.pw, pending.role);
+          if (statusEl) statusEl.textContent = "인증코드를 재전송했습니다. 메일을 확인하세요.";
+        } catch (e) {
+          if (statusEl) statusEl.textContent = e?.message || "재전송 실패";
+        } finally {
+          setBtnLoading(resendBtn, false);
+        }
+      });
+
     } catch (e) {
-      msg.textContent = e?.message || "인증메일 전송 실패";
+      msg.textContent = e?.message || "가입 실패";
     } finally {
       setBtnLoading(submitBtn, false);
     }
   }
 
   form.addEventListener("submit", submitSignup);
-  const submitBtn = form.querySelector('button');
-  submitBtn?.addEventListener('click', submitSignup);
 }
 
 function handleLoginPage() {
   const form = $("#loginForm");
   if (!form) return;
 
-  // 기본적으로 form의 submit 이벤트를 가로채서 페이지 새로고침을 막고 로그인 로직을 수행합니다.
+  let msg = document.getElementById("loginMsg");
+  if (!msg) {
+    msg = document.createElement("div");
+    msg.id = "loginMsg";
+    msg.className = "muted";
+    msg.style.marginTop = "10px";
+    form.insertAdjacentElement("afterend", msg);
+  }
+
+  function setMsg(text, isError = false) {
+    if (!msg) return;
+    msg.textContent = text;
+    msg.style.color = isError ? "#d00" : "#475569";
+  }
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
 
     const email = pickValue("liEmail", "loginEmail", "email").trim();
     const pw = pickValue("liPass", "loginPw", "password", "pw");
+    const submitBtn = form.querySelector("button");
 
     if (!email || !pw) {
-      alert("이메일/비밀번호를 입력하세요.");
+      setMsg("이메일/비밀번호를 입력하세요.", true);
       return;
     }
 
-    // 로컬 로그인 우선 (OTP 가입)
-    const ok = localLogin(email, pw);
-    if (!ok) alert("이메일 또는 비밀번호가 올바르지 않습니다.");
+    try {
+      setBtnLoading(submitBtn, true, "로그인중...");
+      await supabaseLogin(email, pw);
+      setMsg("로그인 성공! 이동합니다.", false);
+      setTimeout(() => { location.href = "index.html"; }, 300);
+    } catch (err) {
+      setMsg(err?.message || "로그인 실패", true);
+    } finally {
+      setBtnLoading(submitBtn, false);
+    }
   });
-
-  // 추가 안전장치: 일부 환경에서는 submit 이벤트가 아닌 button의 클릭이 발생할 수 있으므로
-  // 로그인 버튼 클릭 시에도 기본 동작을 막고 같은 로직을 실행합니다.
-  const submitBtn = form.querySelector('button');
-  if (submitBtn) {
-    submitBtn.addEventListener('click', async (ev) => {
-      ev.preventDefault();
-      const email = pickValue("liEmail", "loginEmail", "email").trim();
-      const pw = pickValue("liPass", "loginPw", "password", "pw");
-      if (!email || !pw) {
-        alert("이메일/비밀번호를 입력하세요.");
-        return;
-      }
-      const ok = localLogin(email, pw);
-      if (!ok) alert("이메일 또는 비밀번호가 올바르지 않습니다.");
-    });
-  }
 }
 
 // ---------------------------
@@ -1116,26 +1000,39 @@ function handleSettingsPage() {
   const pwInput = $("#settingsPw");
   const msg = $("#settingsMsg");
 
-  delBtn?.addEventListener("click", () => {
+  delBtn?.addEventListener("click", async () => {
     const pw = (pwInput?.value || "").trim();
-    normalizeUsersInStorage();
-    const users = getUsers();
-    const me = users.find(x => normalizeEmail(x.email) === normalizeEmail(user.email)) || null;
-    if (!me) {
-      msg.textContent = "계정을 찾을 수 없습니다.";
-      return;
-    }
-    const realPw = getUserPassword(me);
-    if (String(pw) !== String(realPw)) {
-      msg.textContent = "비밀번호가 일치하지 않습니다.";
+    if (!pw) {
+      msg.textContent = "비밀번호를 입력하세요.";
       return;
     }
 
-    if (!confirm("정말로 계정을 삭제하시겠습니까?")) return;
+    try {
+      msg.textContent = "";
+      setBtnLoading(delBtn, true, "확인 중...");
 
-    removeUserData(user);
-    alert("계정을 삭제했습니다.");
-    location.href = "signup.html";
+      // 비밀번호 확인용 재로그인 시도 (세션 유지)
+      await supabaseLogin(user.email, pw);
+
+      if (!confirm("정말로 계정을 삭제하시겠습니까?")) {
+        setBtnLoading(delBtn, false);
+        return;
+      }
+
+      await apiPost("/api/account/delete", {});
+      alert("계정을 삭제했습니다.");
+      await doLogout(true);
+    } catch (e) {
+      console.error(e);
+      const errText = e?.message || "";
+      if (errText.includes("Not Found")) {
+        msg.textContent = "계정 삭제 API를 찾을 수 없습니다. 백엔드가 최신 코드로 실행 중인지 확인하세요. (npm run dev 재시작)";
+      } else {
+        msg.textContent = errText || "계정 삭제에 실패했습니다.";
+      }
+    } finally {
+      setBtnLoading(delBtn, false);
+    }
   });
 }
 
@@ -1271,9 +1168,10 @@ function ensureReplayModalBinding() {
   window.__openReplayModal = async (payload) => {
     // payload:
     //  - string(title)
-    //  - { title, vodKey, classId, replayId }
+    //  - { title, vodKey, vodUrl, classId, replayId }
     const title = (typeof payload === "string") ? payload : (payload?.title || "다시보기");
     let vodKey = (typeof payload === "object") ? (payload?.vodKey || null) : null;
+    const vodUrl = (typeof payload === "object") ? (payload?.vodUrl || null) : null;
     const classId = (typeof payload === "object") ? (payload?.classId || null) : null;
     const replayId = (typeof payload === "object") ? (payload?.replayId || null) : null;
 
@@ -1291,13 +1189,14 @@ function ensureReplayModalBinding() {
     // ? 없으면(예: 이전 데이터에 vodKey만 있고 blob 누락) 데모 영상을 "자동 생성"해서 보여줌
     if (vodVideo) {
       let blob = null;
+      let urlToPlay = vodUrl || null;
 
-      if (vodKey) {
+      if (!urlToPlay && vodKey) {
         try { blob = await vodGetBlob(vodKey); } catch (_) { blob = null; }
       }
 
       // blob이 없으면: 데모 blob을 만들어서 저장 후 재생
-      if (!blob) {
+      if (!urlToPlay && !blob) {
         try {
           const newKey = vodKey || `vod_autogen_${Date.now()}`;
           const demo = await makeDemoVodBlob(title || "VOD");
@@ -1322,9 +1221,11 @@ function ensureReplayModalBinding() {
         }
       }
 
-      if (blob) {
-        currentVodObjectUrl = URL.createObjectURL(blob);
-        vodVideo.src = currentVodObjectUrl;
+      // vodUrl이 우선, 없으면 blob으로 재생
+      if (urlToPlay || blob) {
+        const src = urlToPlay || URL.createObjectURL(blob);
+        if (!urlToPlay) currentVodObjectUrl = src;
+        vodVideo.src = src;
         vodVideo.style.display = "block";
         if (vodEmpty) vodEmpty.style.display = "none";
         // 자동재생 시도 (브라우저 정책에 따라 실패할 수 있음)
@@ -1386,7 +1287,7 @@ function refreshReplayButtons(canWatch) {
   });
 }
 
-function loadClassDetailPage() {
+async function loadClassDetailPage() {
   const root = $("#detailRoot");
   if (!root) return;
 
@@ -1400,6 +1301,33 @@ function loadClassDetailPage() {
   if (!c) {
     $("#detailTitle").textContent = "수업을 찾을 수 없습니다.";
     return;
+  }
+
+  // 원격 데이터 불러오기
+  try {
+    const [mats, assigns, revs, qnas] = await Promise.all([
+      apiGet(`/api/classes/${encodeURIComponent(id)}/materials`).catch(() => []),
+      apiGet(`/api/classes/${encodeURIComponent(id)}/assignments`).catch(() => []),
+      apiGet(`/api/classes/${encodeURIComponent(id)}/reviews`).catch(() => []),
+      apiGet(`/api/classes/${encodeURIComponent(id)}/qna`).catch(() => []),
+    ]);
+    const matsMap = getMaterials();
+    matsMap[id] = mats || [];
+    setMaterials(matsMap);
+
+    const assignMap = getAssignments();
+    assignMap[id] = assigns || [];
+    setAssignments(assignMap);
+
+    const revMap = getReviews();
+    revMap[id] = revs || [];
+    setReviews(revMap);
+
+    const qMap = getQna();
+    qMap[id] = qnas || [];
+    setQna(qMap);
+  } catch (e) {
+    console.error("class detail data fetch failed", e);
   }
 
   $("#detailImg").src = c.thumb || FALLBACK_THUMB;
@@ -1477,7 +1405,7 @@ function loadClassDetailPage() {
     if (!user) return { state: "guest", e: null, active: false, endText: "-" };
 
     if (user.role === "teacher") {
-      const isOwnerTeacher = (user.name === c.teacher);
+      const isOwnerTeacher = (user.id && c.teacherId && user.id === c.teacherId) || (user.name === c.teacher);
       return { state: isOwnerTeacher ? "owner_teacher" : "other_teacher", e: null, active: true, endText: "-" };
     }
 
@@ -1598,7 +1526,7 @@ function loadClassDetailPage() {
           return;
         }
 
-        const isOwnerTeacher = (u.role === "teacher" && u.name === c.teacher);
+        const isOwnerTeacher = (u.role === "teacher" && ((u.id && c.teacherId && u.id === c.teacherId) || u.name === c.teacher));
 
         if (u.role === "teacher") {
           if (!isOwnerTeacher) {
@@ -1628,7 +1556,7 @@ function loadClassDetailPage() {
   refreshGates();
   bindEnterClicks();
 
-  buyBtn?.addEventListener("click", () => {
+  buyBtn?.addEventListener("click", async () => {
     const user = getUser();
     if (!user) {
       alert("로그인이 필요합니다.");
@@ -1648,47 +1576,21 @@ function loadClassDetailPage() {
       return;
     }
 
-    const { weekly, dur, total, start, end } = calc();
+    const { weekly, dur, total } = calc();
 
-    const enroll = getEnrollments();
-
-    // ? v12: 저장키에는 빈키("")를 포함하지 않는다 (읽기는 호환)
-    const keys = userKeyList(user, false).filter(k => k !== "");
-
-    if (!keys.length) {
-      alert("계정 정보가 부족해 수강 등록을 저장할 수 없습니다. (id/email 확인 필요)");
-      return;
+    try {
+      await apiPost(`/api/classes/${encodeURIComponent(c.id)}/enroll`, {
+        planType: weekly ? "weekly" : "monthly",
+        duration: dur,
+        paidAmount: total,
+      });
+      const latest = await apiGet("/api/me/enrollments");
+      setEnrollments(latest || []);
+      alert("수강 등록 완료!");
+    } catch (err) {
+      console.error(err);
+      alert("수강 등록 실패\n" + (err?.message || ""));
     }
-
-    const record = {
-      planType: weekly ? "weekly" : "monthly",
-      duration: dur,
-      startAt: start.toISOString(),
-      endAt: end.toISOString(),
-      paidAmount: total
-    };
-
-    keys.forEach(k => {
-      enroll[k] = enroll[k] || {};
-      enroll[k][c.id] = record;
-    });
-
-    setEnrollments(enroll);
-
-    // ? v13: 저장 직후, 현재 로그인 사용자 키로 다시 한번 정규화/검증
-    // (특히 같은 이름/역할 중복, 예전 저장키 혼재 등으로 UI가 안 바뀌는 케이스 방어)
-    const userNow = getUser() || user;
-    normalizeEnrollmentsForUser(userNow, c.id);
-    const verify = readEnrollmentForUser(userNow, c.id);
-    if (!verify) {
-      // 마지막 방어: 아주 구형 저장키(빈키 "")에도 1회 기록
-      const enroll2 = getEnrollments();
-      enroll2[""] = enroll2[""] || {};
-      enroll2[""][c.id] = record;
-      setEnrollments(enroll2);
-    }
-
-    alert("수강 등록 완료!");
 
     refreshGates();
     bindEnterClicks();
@@ -1710,10 +1612,10 @@ function loadClassDetailPage() {
         <div class="session-item">
           <div>
             <div class="session-title">${escapeHtml(m.title)}</div>
-            <div class="session-sub">${new Date(m.at).toLocaleString("ko-KR")} · ${escapeHtml(m.author || "")}</div>
+            <div class="session-sub">${new Date(m.createdAt || m.at || Date.now()).toLocaleString("ko-KR")} · ${escapeHtml(m.uploaderId || m.author || "")}</div>
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <a class="btn primary" href="${escapeAttr(m.url)}" download>다운로드</a>
+            <a class="btn primary" href="${escapeAttr(m.fileUrl || m.url || "#")}" download>다운로드</a>
           </div>
         </div>
       `).join("")
@@ -1723,19 +1625,7 @@ function loadClassDetailPage() {
   function renderAssignments() {
     const list = $("#assignList");
     if (!list) return;
-    const assigns = getAssignments()[c.id] || [];
-    const metaAll = getAssignMeta();
-    // 과제 목록을 배열로 정규화 (기존 단일 객체 저장 호환)
-    let assignList = [];
-    if (Array.isArray(metaAll[c.id])) {
-      assignList = metaAll[c.id];
-    } else if (metaAll[c.id]) {
-      assignList = [{ id: metaAll[c.id].id || ("asg_" + Date.now()), ...metaAll[c.id] }];
-    }
-    assignList = assignList.map(a => a.id ? a : { ...a, id: "asg_" + Date.now() + "_" + Math.random().toString(16).slice(2) });
-    metaAll[c.id] = assignList;
-    setAssignMeta(metaAll);
-
+    const assignList = getAssignments()[c.id] || [];
     const assignMap = Object.fromEntries(assignList.map(a => [a.id, a]));
     const latestAssignId = assignList.length ? assignList[assignList.length - 1].id : null;
     const selectEl = $("#assignSelect");
@@ -1767,9 +1657,10 @@ function loadClassDetailPage() {
     assignPendingSelect = null;
     const meta = (selectedAssignId && assignMap[selectedAssignId]) ? assignMap[selectedAssignId] : (assignList[assignList.length - 1] || {});
 
-    const isOwnerTeacher = user?.role === "teacher" && user?.name === c.teacher;
+    const isOwnerTeacher = user?.role === "teacher" && ((user.id && c.teacherId && user.id === c.teacherId) || user?.name === c.teacher);
     const myEmail = normalizeEmail(user?.email || "");
-    const myAssign = [...assigns].reverse().find(a => normalizeEmail(a.userEmail) === myEmail && (!a.assignId || a.assignId === selectedAssignId));
+    const submissions = Array.isArray(meta?.submissions) ? meta.submissions : [];
+    const myAssign = submissions.find(a => normalizeEmail(a.userEmail || a.studentEmail || "") === myEmail || a.studentId === user?.id) || null;
     const formWrap = document.getElementById("assignFormWrap");
     const textEl = document.getElementById("assignText");
     const fileEl = document.getElementById("assignFile");
@@ -1879,7 +1770,7 @@ function loadClassDetailPage() {
           dueMin.value = "50";
         }
       }
-      document.getElementById("assignDueSave")?.addEventListener("click", () => {
+      document.getElementById("assignDueSave")?.addEventListener("click", async () => {
         const dateStr = document.getElementById("assignDueDate")?.value || "";
         const hourStr = document.getElementById("assignDueHour")?.value || "0";
         const minStr = document.getElementById("assignDueMin")?.value || "0";
@@ -1893,41 +1784,22 @@ function loadClassDetailPage() {
         }
         const title = (document.getElementById("assignTitleInput")?.value || "").trim();
         const desc = (document.getElementById("assignDescInput")?.value || "").trim();
-        const metaAll2 = getAssignMeta();
-        let listArr = Array.isArray(metaAll2[c.id]) ? metaAll2[c.id] : [];
-        const editId = metaBox.dataset.editing || null;
-        if (editId) {
-          listArr = listArr.map(m => m.id === editId ? { ...m, title, desc, dueAt: dueIso, updatedAt: new Date().toISOString() } : m);
-          assignPendingSelect = editId;
-        } else {
-          const newId = "asg_" + Date.now();
-          listArr.push({ id: newId, title, desc, dueAt: dueIso, createdAt: new Date().toISOString(), updatedAt: null });
-          assignPendingSelect = newId;
+        if (!title) { alert("과제명을 입력하세요."); return; }
+        try {
+          await apiPost(`/api/classes/${encodeURIComponent(c.id)}/assignments`, {
+            title,
+            description: desc,
+            dueAt: dueIso,
+          });
+          const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`).catch(() => []);
+          const amap = getAssignments();
+          amap[c.id] = refreshed || [];
+          setAssignments(amap);
+          renderAssignments();
+        } catch (e) {
+          console.error(e);
+          alert("과제 저장 실패\n" + (e?.message || ""));
         }
-        metaBox.dataset.editing = "";
-        metaAll2[c.id] = listArr;
-        setAssignMeta(metaAll2);
-        // 저장 후에도 현재 입력값을 그대로 유지
-        if (!metaBox.dataset.editing) {
-          const t = document.getElementById("assignTitleInput");
-          const d = document.getElementById("assignDescInput");
-          const dueD = document.getElementById("assignDueDate");
-          const dueH = document.getElementById("assignDueHour");
-          const dueM = document.getElementById("assignDueMin");
-          if (t) t.value = title;
-          if (d) d.value = desc;
-          if (dueD && dueH && dueM) {
-            if (dueIso) {
-              const dt = new Date(dueIso);
-              dueD.value = dt.toISOString().slice(0,10);
-              dueH.value = dt.getHours();
-              dueM.value = [0,10,20,30,40,50].includes(dt.getMinutes()) ? dt.getMinutes() : 0;
-            } else {
-              dueD.value = "";
-            }
-          }
-        }
-        renderAssignments();
       });
       document.getElementById("assignDueClear")?.addEventListener("click", () => {
         metaBox.dataset.editing = "";
@@ -2051,27 +1923,21 @@ function loadClassDetailPage() {
       return;
     }
 
-    list.innerHTML = assigns.length
-      ? `<div class="muted" style="margin-bottom:6px;">제출 목록 (${assigns.length})</div>` +
-        assigns.map(a => `
-        <div class="session-item" style="border-left:4px solid rgba(109,94,252,.45); background:linear-gradient(90deg, rgba(109,94,252,.06), rgba(109,94,252,.02));">
-          <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;">
-            <div class="session-title">${escapeHtml(a.userName || a.userEmail || "-")}</div>
-            <span class="chip" style="background:rgba(109,94,252,.12);">${escapeHtml(assignMap[a.assignId || latestAssignId || ""]?.title || "학생 제출")}</span>
-          </div>
-          <div class="session-sub">제출: ${new Date(a.submittedAt || a.at).toLocaleString("ko-KR")}${a.updatedAt ? ` / 수정: ${new Date(a.updatedAt).toLocaleString("ko-KR")}` : ""}</div>
-          <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(a.text || "")}</div>
-          ${a.url ? `<div class="session-sub"><a href="${escapeAttr(a.url)}" target="_blank">링크 열기</a></div>` : ``}
-          ${a.fileName && a.fileData ? `<div class="session-sub"><a href="${escapeAttr(a.fileData)}" download="${escapeAttr(a.fileName)}">첨부파일 다운로드 (${escapeHtml(a.fileName)})</a></div>` : ``}
-          ${typeof a.score === "number" ? `<div class="session-sub">점수: ${a.score} / 피드백: ${escapeHtml(a.comment || "-")}</div>` : ``}
-          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:8px;">
-            <input type="number" min="0" max="100" data-ascore="${escapeAttr(a.id)}" class="input" style="width:90px;" placeholder="점수">
-            <input type="text" data-acmt="${escapeAttr(a.id)}" class="input" style="width:160px;" placeholder="피드백">
-            <button class="btn primary" data-agrade="${escapeAttr(a.id)}">저장</button>
+    list.innerHTML = assignList.length
+      ? assignList.map(a => {
+        const subCount = Array.isArray(a.submissions) ? a.submissions.length : 0;
+        return `
+        <div class="session-item">
+          <div>
+            <div class="session-title">${escapeHtml(a.title)}</div>
+            <div class="session-sub">제출 마감: ${a.dueAt ? new Date(a.dueAt).toLocaleString("ko-KR") : "마감 없음"}</div>
+            <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(a.description || "")}</div>
+            <div class="session-sub">제출: ${subCount}건</div>
           </div>
         </div>
-      `).join("")
-      : `<div class="muted" style="font-size:13px;">제출된 과제가 없습니다.</div>`;
+      `;
+      }).join("")
+      : `<div class="muted" style="font-size:13px;">등록된 과제가 없습니다.</div>`;
 
     if (isOwnerTeacher) {
       $$("[data-agrade]").forEach(btn => {
@@ -2102,9 +1968,9 @@ function loadClassDetailPage() {
       ${revs.length ? revs.map(r => `
         <div class="session-item">
           <div>
-            <div class="session-title">★ ${r.rating} · ${escapeHtml(r.userName || r.userEmail || "")}</div>
-            <div class="session-sub">${new Date(r.at).toLocaleString("ko-KR")}</div>
-            <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(r.text || "")}</div>
+            <div class="session-title">★ ${r.rating} · ${escapeHtml(r.userId || r.userName || r.userEmail || "")}</div>
+            <div class="session-sub">${new Date(r.createdAt || r.at).toLocaleString("ko-KR")}</div>
+            <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(r.comment || r.text || "")}</div>
           </div>
         </div>
       `).join("") : `<div class="muted" style="font-size:13px;">아직 리뷰가 없습니다.</div>`}
@@ -2114,18 +1980,17 @@ function loadClassDetailPage() {
   function renderQna() {
     const list = $("#qnaList");
     if (!list) return;
-    const qnas = getQna()[c.id] || [];
-    list.innerHTML = qnas.length ? qnas.map(q => `
-      <div class="session-item">
-        <div>
-          <div class="session-title">${escapeHtml(q.userName || q.userEmail || "")} · ${escapeHtml(q.role || "")}</div>
-          <div class="session-sub">${new Date(q.at).toLocaleString("ko-KR")}</div>
-          <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(q.text || "")}</div>
+  const qnas = getQna()[c.id] || [];
+  list.innerHTML = qnas.length ? qnas.map(q => `
+    <div class="session-item">
+      <div>
+          <div class="session-title">${escapeHtml(q.question || q.text || "")}</div>
+          <div class="session-sub">${new Date(q.createdAt || q.at || Date.now()).toLocaleString("ko-KR")} · ${escapeHtml(q.userName || q.userEmail || "사용자")}</div>
           <div style="margin-top:8px; display:grid; gap:6px;">
             ${(q.replies || []).map(r => `
               <div class="session-sub" style="background:rgba(15,23,42,.04); padding:6px 8px; border-radius:10px;">
-                <strong>${escapeHtml(r.userName || r.userEmail || "")} · ${escapeHtml(r.role || "")}</strong><br/>
-                ${escapeHtml(r.text || "")} <span style="color:var(--muted2);">(${new Date(r.at).toLocaleString("ko-KR")})</span>
+                <strong>${escapeHtml(r.userName || r.userEmail || r.userId || "")}</strong><br/>
+                ${escapeHtml(r.text || r.comment || "")} <span style="color:var(--muted2);">(${new Date(r.at || r.createdAt || Date.now()).toLocaleString("ko-KR")})</span>
               </div>
             `).join("")}
           </div>
@@ -2138,19 +2003,23 @@ function loadClassDetailPage() {
     `).join("") : `<div class="muted" style="font-size:13px;">등록된 질문이 없습니다.</div>`;
 
     $$("[data-qreplybtn]").forEach(btn => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         if (!user) { alert("로그인이 필요합니다."); return; }
         const qid = btn.getAttribute("data-qreplybtn");
         const inp = document.querySelector(`[data-qreply="${CSS.escape(qid)}"]`);
         const text = (inp?.value || "").trim();
         if (!text) return;
-        const all = getQna();
-        all[c.id] = (all[c.id] || []).map(q => q.id === qid ? {
-          ...q,
-          replies: [ ...(q.replies||[]), { userEmail: user.email, userName: user.name, role: user.role, text, at: new Date().toISOString() } ]
-        } : q);
-        setQna(all);
-        renderQna();
+        try {
+          await apiPost(`/api/qna/${encodeURIComponent(qid)}/comments`, { comment: text });
+          const list = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/qna`).catch(() => []);
+          const all = getQna();
+          all[c.id] = list || [];
+          setQna(all);
+          renderQna();
+        } catch (e) {
+          console.error(e);
+          alert("댓글 저장 실패");
+        }
       });
     });
   }
@@ -2164,20 +2033,42 @@ function loadClassDetailPage() {
     const file = $("#matFile")?.files?.[0] || null;
     if (!title || !file) { alert("제목과 파일을 입력하세요."); return; }
     const reader = new FileReader();
-    reader.onload = () => {
-      const mats = getMaterials();
-      mats[c.id] = mats[c.id] || [];
-      mats[c.id].push({
-        id: "m_" + Date.now(),
-        title,
-        url: String(reader.result || ""),
-        author: user.name || user.email,
-        at: new Date().toISOString()
-      });
-      setMaterials(mats);
-      renderMaterials();
-      $("#matTitle").value = "";
-      $("#matFile").value = "";
+    reader.onload = async () => {
+      const fileDataUrl = String(reader.result || "");
+      try {
+        await apiPost(`/api/classes/${encodeURIComponent(c.id)}/materials`, {
+          title,
+          fileUrl: fileDataUrl,
+          mime: file.type || null,
+        });
+        const mats = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/materials`).catch(() => []);
+        const mm = getMaterials();
+        mm[c.id] = mats || [];
+        setMaterials(mm);
+        renderMaterials();
+        // 비디오 파일이라면 다시보기에도 자동 등록
+        if (file.type && file.type.startsWith("video/")) {
+          try {
+            await apiPost(`/api/classes/${encodeURIComponent(c.id)}/replays`, {
+              title: `${title} (업로드 영상)`,
+              vodUrl: fileDataUrl,
+              mime: file.type || null,
+            });
+            const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/replays`).catch(() => []);
+            const rp = getReplays();
+            rp[c.id] = refreshed || [];
+            setReplays(rp);
+            renderReplaysList(c.id);
+          } catch (err) {
+            console.error(err);
+          }
+        }
+        $("#matTitle").value = "";
+        $("#matFile").value = "";
+      } catch (e) {
+        console.error(e);
+        alert("자료 업로드 실패");
+      }
     };
     reader.readAsDataURL(file);
   });
@@ -2185,10 +2076,9 @@ function loadClassDetailPage() {
   // 과제 제출 (학생만)
   const assignForm = $("#assignFormWrap");
     if (assignForm) assignForm.style.display = (user?.role === "student") ? "block" : "none";
-  $("#assignSubmitBtn")?.addEventListener("click", () => {
+  $("#assignSubmitBtn")?.addEventListener("click", async () => {
     if (!user || user.role !== "student") return;
-    const metaMap = getAssignMeta();
-    const assignList = Array.isArray(metaMap[c.id]) ? metaMap[c.id] : [];
+    const assignList = Array.isArray(getAssignments()[c.id]) ? getAssignments()[c.id] : [];
     const select = document.getElementById("assignSelect");
     const currentAssignId = select?.value || (assignList[assignList.length - 1]?.id);
     if (!currentAssignId) { alert("등록된 과제가 없습니다."); return; }
@@ -2201,69 +2091,32 @@ function loadClassDetailPage() {
     const file = $("#assignFile")?.files?.[0] || null;
     if (!text && !file) { alert("제출 내용 또는 파일을 입력하세요."); return; }
 
-    const saveAssignment = (fileData, fileName) => {
-      const assigns = getAssignments();
-      assigns[c.id] = assigns[c.id] || [];
-      const nowIso = new Date().toISOString();
-      const idx = assigns[c.id].findIndex(a =>
-        normalizeEmail(a.userEmail) === normalizeEmail(user.email) &&
-        (a.assignId || "") === (currentAssignId || "")
-      );
-      const base = {
-        userEmail: user.email,
-        userName: user.name,
-        text,
-        url: null,
-        fileName: fileName || "",
-        fileData: fileData || "",
-        assignId: currentAssignId,
-      };
-      if (idx >= 0) {
-        const prev = assigns[c.id][idx];
-        assigns[c.id][idx] = {
-          ...prev,
-          ...base,
-          submittedAt: prev.submittedAt || prev.at || nowIso,
-          updatedAt: nowIso
-        };
-      } else {
-        assigns[c.id].push({
-          id: "a_" + Date.now(),
-          ...base,
-          submittedAt: nowIso,
-          updatedAt: null,
-          at: nowIso
+    const saveAssignment = async (fileData) => {
+      try {
+        await apiPost(`/api/assignments/${encodeURIComponent(currentAssignId)}/submissions`, {
+          content: text,
+          fileUrl: fileData || null,
         });
-      }
-      setAssignments(assigns);
-      // 제출 후 바로 읽기모드로 전환하고, 선택 유지
-      assignPendingSelect = currentAssignId; // 방금 제출한 과제로 선택 유지
-      // 먼저 읽기 모드 플래그를 내려놓은 뒤 렌더링
-      const formWrapNow = document.getElementById("assignFormWrap");
-      if (formWrapNow) formWrapNow.dataset.editing = "0";
-      renderAssignments();
-      // 최신 DOM 기준으로 입력/버튼 숨기기
-      const formNow = document.getElementById("assignFormWrap");
-      const txtNow = document.getElementById("assignText");
-      const fileNow = document.getElementById("assignFile");
-      const btnNow = document.getElementById("assignSubmitBtn");
-      if (formNow) { formNow.dataset.editing = "0"; formNow.style.display = "none"; }
-      if (txtNow) txtNow.style.display = "none";
-      if (fileNow) fileNow.style.display = "none";
-      if (btnNow) btnNow.style.display = "none";
-      const st = document.getElementById("assignStatus");
-      if (st) {
-        const titleTxt = assignList.find(a => a.id === currentAssignId)?.title || "과제";
-        st.textContent = `${titleTxt} 제출 완료. 수정하려면 수정 버튼을 눌러주세요.`;
+        const assigns = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`).catch(() => []);
+        const map = getAssignments();
+        map[c.id] = assigns || [];
+        setAssignments(map);
+        renderAssignments();
+        $("#assignText").value = "";
+        $("#assignFile").value = "";
+        alert("과제 제출 완료!");
+      } catch (e) {
+        console.error(e);
+        alert("과제 제출 실패");
       }
     };
 
     if (file) {
       const reader = new FileReader();
-      reader.onload = () => saveAssignment(String(reader.result || ""), file.name);
+      reader.onload = () => saveAssignment(String(reader.result || ""));
       reader.readAsDataURL(file);
     } else {
-      saveAssignment("", "");
+      saveAssignment("");
     }
   });
 
@@ -2292,56 +2145,44 @@ function loadClassDetailPage() {
   const reviewBtn = $("#reviewSubmitBtn");
   if (reviewBtn && !reviewBtn.dataset.bound) {
     reviewBtn.dataset.bound = "1";
-    reviewBtn.addEventListener("click", () => {
-    if (!canReview) return;
-    const rating = Number($("#reviewRating")?.value || 5);
-    const text = ($("#reviewText")?.value || "").trim();
-    const revs = getReviews();
-    revs[c.id] = revs[c.id] || [];
-    const emailKey = normalizeEmail(user.email);
-    const now = new Date().toISOString();
-    const idx = revs[c.id].findIndex(r => normalizeEmail(r.userEmail) === emailKey);
-    const payload = {
-      id: idx >= 0 ? revs[c.id][idx].id : "rv_" + Date.now(),
-      userEmail: user.email,
-      userName: user.name,
-      rating,
-      text,
-      at: now
-    };
-    if (idx >= 0) {
-      revs[c.id][idx] = payload;
-      alert("기존 리뷰를 업데이트했습니다.");
-    } else {
-      revs[c.id].push(payload);
-    }
-    setReviews(revs);
-    $("#reviewText").value = "";
-    renderReviews();
-  });
+    reviewBtn.addEventListener("click", async () => {
+      if (!canReview) return;
+      const rating = Number($("#reviewRating")?.value || 5);
+      const text = ($("#reviewText")?.value || "").trim();
+      try {
+        await apiPost(`/api/classes/${encodeURIComponent(c.id)}/reviews`, { rating, comment: text });
+        const rev = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/reviews`).catch(() => []);
+        const rmap = getReviews();
+        rmap[c.id] = rev || [];
+        setReviews(rmap);
+        $("#reviewText").value = "";
+        renderReviews();
+      } catch (e) {
+        console.error(e);
+        alert("리뷰 저장 실패");
+      }
+    });
   }
 
   // Q&A 작성 (로그인 필요)
   const qnaForm = $("#qnaFormWrap");
   if (qnaForm) qnaForm.style.display = user ? "block" : "none";
-  $("#qnaSubmitBtn")?.addEventListener("click", () => {
+  $("#qnaSubmitBtn")?.addEventListener("click", async () => {
     if (!user) { alert("로그인이 필요합니다."); return; }
     const text = ($("#qnaText")?.value || "").trim();
     if (!text) return;
-    const all = getQna();
-    all[c.id] = all[c.id] || [];
-    all[c.id].push({
-      id: "q_" + Date.now(),
-      userEmail: user.email,
-      userName: user.name,
-      role: user.role,
-      text,
-      replies: [],
-      at: new Date().toISOString()
-    });
-    setQna(all);
-    $("#qnaText").value = "";
-    renderQna();
+    try {
+      await apiPost(`/api/classes/${encodeURIComponent(c.id)}/qna`, { question: text });
+      const list = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/qna`).catch(() => []);
+      const all = getQna();
+      all[c.id] = list || [];
+      setQna(all);
+      $("#qnaText").value = "";
+      renderQna();
+    } catch (e) {
+      console.error(e);
+      alert("Q&A 등록 실패");
+    }
   });
 
   renderMaterials();
@@ -2350,213 +2191,203 @@ function loadClassDetailPage() {
   renderQna();
 }
 
-function renderReplaysList(classId) {
+async function renderReplaysList(classId) {
   const wrap = $("#sessionList");
   if (!wrap) return;
 
   const user = getUser();
-  const c = getClasses().find(x => x.id === classId);
-  const isOwnerTeacher = user?.role === "teacher" && user?.name === c?.teacher;
+  const cls = getClasses().find((x) => x.id === classId);
+  const isOwnerTeacher = user?.role === "teacher" && ((user.id && cls?.teacherId && user.id === cls.teacherId) || user?.name === cls?.teacher);
   const activeStudent = user?.role === "student" && isEnrollmentActiveForUser(user, classId);
   const canWatch = isOwnerTeacher || activeStudent;
 
-  const replays = getReplays();
-  const list = replays[classId] || [];
+  wrap.innerHTML = `<div class="muted" style="padding:10px 2px;">지난 수업 불러오는 중...</div>`;
 
-  wrap.innerHTML = `
-    ${list.length ? list.map(r => `
-      <div class="session-item ${canWatch ? "" : "locked"}">
-        <div>
-          <div class="session-title">${escapeHtml(r.title)}</div>
-          <div class="session-sub">
-            ${new Date(r.createdAt).toLocaleString("ko-KR")}
-            ${r.vodKey ? ` · <span class="badge" style="margin-left:6px;">영상</span>` : ``}
-          </div>
-        </div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button class="btn ${canWatch ? "primary":"ghost"}" ${canWatch ? "" : "disabled"} data-replay="${escapeAttr(r.id)}">재생</button>
-          ${isOwnerTeacher ? `<button class="btn danger" data-rdel="${escapeAttr(r.id)}">삭제</button>` : ``}
-        </div>
-      </div>
-    `).join("") : `
-      <div class="muted" style="font-size:13px; padding:10px 2px;">
-        아직 저장된 다시보기가 없어요.
-      </div>
-    `}
-    ${isOwnerTeacher ? `
-      <div style="margin-top:12px;">
-        <button class="btn" id="teacherAddVod">선생님: 데모 다시보기 추가</button>
-      </div>
-    ` : ``}
-    ${(!canWatch && user?.role === "student") ? `
-      <div class="muted" style="font-size:13px; margin-top:10px;">
-        수강 중인 학생만 다시보기를 볼 수 있어요.
-      </div>
-    ` : ``}
-  `;
+  function stateList() {
+    return getReplays()[classId] || [];
+  }
 
-  $$('[data-replay]', wrap).forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (btn.disabled) return;
-      const rid = btn.getAttribute("data-replay");
-      const rp = getReplays();
-      const item = (rp[classId] || []).find(x => x.id === rid);
-      const title = item?.title || "VOD 데모";
-
-      if (typeof window.__openReplayModal === "function") {
-        window.__openReplayModal({
-          title,
-          vodKey: item?.vodKey || null,
-          classId,
-          replayId: rid,
-        });
-      } else {
-        alert("VOD 데모 재생");
-      }
-    });
-  });
-
-  $("#teacherAddVod")?.addEventListener('click', async () => {
-    if (!isOwnerTeacher) {
-      alert("선생님(본인 수업)만 추가할 수 있어요.");
-      return;
-    }
-
-    const btn = $("#teacherAddVod");
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "데모 VOD 생성 중...";
-    }
-
-    // 아주 짧은 데모 영상(캔버스 애니메이션)을 만들어 IndexedDB에 저장
-    async function makeDemoBlob() {
-      const canvas = document.createElement("canvas");
-      canvas.width = 1280;
-      canvas.height = 720;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("canvas ctx");
-
-      const stream = canvas.captureStream(30);
-      const mimeCandidates = [
-        "video/webm;codecs=vp9,opus",
-        "video/webm;codecs=vp8,opus",
-        "video/webm"
-      ];
-      let mimeType = "";
-      for (const m of mimeCandidates) {
-        if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) {
-          mimeType = m;
-          break;
-        }
-      }
-
-      return new Promise((resolve, reject) => {
-        if (!window.MediaRecorder) return reject(new Error("MediaRecorder unsupported"));
-        const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-        const chunks = [];
-        let startTs = performance.now();
-
-        rec.ondataavailable = (ev) => {
-          if (ev.data && ev.data.size) chunks.push(ev.data);
-        };
-        rec.onerror = () => reject(new Error("MediaRecorder error"));
-        rec.onstop = () => {
-          const type = mimeType || (chunks[0] && chunks[0].type) || "video/webm";
-          resolve(new Blob(chunks, { type }));
-        };
-
-        function drawFrame(now) {
-          const t = (now - startTs) / 1000;
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          // 배경
-          const g = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-          g.addColorStop(0, "rgba(109,94,252,.20)");
-          g.addColorStop(1, "rgba(0,211,255,.18)");
-          ctx.fillStyle = g;
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-          // 제목
-          ctx.fillStyle = "rgba(15,23,42,.85)";
-          ctx.font = "700 48px system-ui, -apple-system, Segoe UI, Roboto";
-          ctx.fillText("LessonBay VOD Demo", 70, 110);
-          ctx.font = "500 28px system-ui, -apple-system, Segoe UI, Roboto";
-          ctx.fillStyle = "rgba(15,23,42,.65)";
-          ctx.fillText("녹화/다시보기 동작 확인용 샘플", 70, 160);
-
-          // 움직이는 도형
-          const cx = 200 + (Math.sin(t * 1.7) * 1) * 420;
-          const cy = 420 + Math.cos(t * 1.3) * 120;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 90, 0, Math.PI * 2);
-          ctx.fillStyle = "rgba(109,94,252,.55)";
-          ctx.fill();
-
-          ctx.beginPath();
-          if (ctx.roundRect) ctx.roundRect(520, 330, 620, 210, 32);
-          else ctx.rect(520, 330, 620, 210);
-          ctx.fillStyle = "rgba(255,255,255,.75)";
-          ctx.fill();
-          ctx.fillStyle = "rgba(15,23,42,.85)";
-          ctx.font = "800 44px system-ui";
-          ctx.fillText("00:" + String(Math.floor(t)).padStart(2, "0"), 570, 420);
-
-          if (t < 2.2) {
-            requestAnimationFrame(drawFrame);
-          } else {
-            rec.stop();
-          }
-        }
-
-        rec.start(200);
-        requestAnimationFrame(drawFrame);
-      });
-    }
-
+  async function loadReplays() {
     try {
-      const demoBlob = await makeDemoBlob();
-      const vodKey = `vod_demo_${classId}_${Date.now()}`;
-      await vodPut(vodKey, demoBlob);
-
+      const listRemote = await apiGet(`/api/classes/${encodeURIComponent(classId)}/replays`);
       const rp = getReplays();
-      rp[classId] = rp[classId] || [];
-      rp[classId].unshift({
-        id: "r_" + Date.now(),
-        title: `(${new Date().toLocaleDateString("ko-KR")}) ${getClasses().find(x => x.id === classId)?.title || "수업"} · VOD 데모`,
-        createdAt: new Date().toISOString(),
-        vodKey
-      });
+      rp[classId] = (listRemote || []).map((r) => ({
+        ...r,
+        hasVod: r.hasVod ?? !!r.vodUrl,
+      }));
       setReplays(rp);
-      renderReplaysList(classId);
-      alert('데모 다시보기를 추가했습니다. (재생하면 실제 영상이 나옵니다)');
     } catch (e) {
       console.error(e);
-      alert("데모 VOD 생성에 실패했습니다. (브라우저가 MediaRecorder/captureStream을 지원하지 않을 수 있어요)");
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = "선생님: 데모 다시보기 추가";
-      }
+      wrap.innerHTML = `<div class="muted" style="padding:10px 2px;">다시보기를 불러오지 못했습니다.</div>`;
     }
-  });
+  }
 
-  $$('[data-rdel]', wrap).forEach(btn => {
-    btn.addEventListener('click', () => {
-      const rid = btn.getAttribute('data-rdel');
-      if (!confirm('이 다시보기를 삭제할까요?')) return;
-      const rp = getReplays();
-      const target = (rp[classId] || []).find(x => x.id === rid);
-      rp[classId] = (rp[classId] || []).filter(x => x.id !== rid);
-      setReplays(rp);
-      // IndexedDB에 저장된 영상도 함께 삭제
-      if (target?.vodKey) {
-        vodDelete(target.vodKey).catch(() => {});
-      }
-      renderReplaysList(classId);
+  async function fetchReplayVod(replayId) {
+    const rp = getReplays();
+    const cached = (rp[classId] || []).find((x) => x.id === replayId);
+    if (cached?.vodUrl) return cached.vodUrl;
+
+    const full = await apiGet(`/api/replays/${encodeURIComponent(replayId)}`);
+    const updated = (rp[classId] || []).map((x) => (
+      x.id === replayId ? { ...x, vodUrl: full?.vodUrl, hasVod: full?.hasVod ?? !!full?.vodUrl } : x
+    ));
+    rp[classId] = updated;
+    setReplays(rp);
+    return full?.vodUrl || "";
+  }
+
+  function renderList() {
+    const list = stateList();
+
+    wrap.innerHTML = `
+      ${list.length ? list.map((r) => `
+        <div class="session-item ${canWatch ? "" : "locked"}">
+          <div>
+            <div class="session-title">${escapeHtml(r.title || "다시보기")}</div>
+            <div class="session-sub">
+              ${r.createdAt ? new Date(r.createdAt).toLocaleString("ko-KR") : ""}
+              ${(r.hasVod ?? !!r.vodUrl) ? `<span class=\"badge\" style=\"margin-left:6px;\">VOD</span>` : ``}
+            </div>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="btn ${canWatch ? "primary" : "ghost"}" ${canWatch ? "" : "disabled"} data-replay="${escapeAttr(r.id)}">재생</button>
+            ${isOwnerTeacher ? `<button class=\"btn danger\" data-rdel=\"${escapeAttr(r.id)}\">삭제</button>` : ``}
+          </div>
+        </div>
+      `).join("") : `
+        <div class="muted" style="font-size:13px; padding:10px 2px;">등록된 다시보기가 없어요.</div>
+      `}
+      ${isOwnerTeacher ? `
+        <div style="margin-top:12px; display:grid; gap:8px;">
+          <input id="replayTitleInput" class="input" placeholder="제목 (예: 1주차 다시보기)">
+          <input id="replayUrlInput" class="input" placeholder="VOD URL (HLS/MP4 링크)">
+          <input id="replayFileInput" class="input" type="file" accept="video/*">
+          <button class="btn" id="teacherAddVod">다시보기 등록</button>
+          <div class="muted" style="font-size:12px;">URL 또는 영상 파일 중 하나만 입력하세요. 파일은 브라우저에서 인코딩되어 서버로 전송됩니다.</div>
+        </div>
+      ` : ``}
+      ${(!canWatch && user?.role === "student") ? `
+        <div class="muted" style="font-size:13px; margin-top:10px;">
+          수강 중인 학생만 다시보기를 볼 수 있습니다.
+        </div>
+      ` : ``}
+    `;
+
+    $$('[data-replay]', wrap).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const rid = btn.getAttribute("data-replay");
+        const item = stateList().find((x) => x.id === rid);
+        if (!canWatch) {
+          alert("수강 중인 학생 또는 선생님만 재생할 수 있습니다.");
+          return;
+        }
+
+        const prev = btn.textContent;
+        btn.disabled = true;
+        btn.classList.add("is-loading");
+        btn.textContent = "불러오는 중...";
+
+        try {
+          const vodUrl = await fetchReplayVod(rid);
+          if (!vodUrl) {
+            alert("영상 데이터가 없습니다. 녹화 후 다시 시도하세요.");
+            return;
+          }
+          if (typeof window.__openReplayModal === "function") {
+            await window.__openReplayModal({ title: item?.title || "다시보기", vodUrl, classId, replayId: rid });
+          } else {
+            window.open(vodUrl, "_blank");
+          }
+        } catch (err) {
+          console.error(err);
+          alert("다시보기를 재생할 수 없습니다.\n" + (err?.message || ""));
+        } finally {
+          btn.disabled = false;
+          btn.classList.remove("is-loading");
+          btn.textContent = prev;
+        }
+      });
     });
-  });
 
-  refreshReplayButtons(canWatch);
+    $("#teacherAddVod")?.addEventListener("click", async () => {
+      if (!isOwnerTeacher) {
+        alert("선생님 계정만 다시보기를 등록할 수 있습니다.");
+        return;
+      }
+      const title = ($("#replayTitleInput")?.value || "").trim() || `${cls?.title || "수업"} 다시보기`;
+      const url = ($("#replayUrlInput")?.value || "").trim();
+      const file = $("#replayFileInput")?.files?.[0] || null;
+      if (!url && !file) {
+        alert("VOD URL이나 영상 파일을 입력하세요.");
+        return;
+      }
+      let vodPayload = url;
+      if (!vodPayload && file) {
+        try {
+          vodPayload = await blobToDataUrl(file);
+        } catch (err) {
+          console.error(err);
+          alert("영상 파일을 읽지 못했습니다.");
+          return;
+        }
+      }
+      try {
+        const created = await apiPost(`/api/classes/${encodeURIComponent(classId)}/replays`, { title, vodUrl: vodPayload, mime: file?.type || null });
+        const rp = getReplays();
+        const meta = { ...created, hasVod: created?.hasVod ?? !!created?.vodUrl, vodUrl: undefined };
+        rp[classId] = [meta, ...(rp[classId] || [])];
+        setReplays(rp);
+        renderList();
+
+        const titleInput = $("#replayTitleInput");
+        const urlInput = $("#replayUrlInput");
+        const fileInput = $("#replayFileInput");
+        if (titleInput) titleInput.value = "";
+        if (urlInput) urlInput.value = "";
+        if (fileInput) fileInput.value = "";
+        alert("다시보기를 등록했습니다.");
+      } catch (e) {
+        console.error(e);
+        alert("다시보기 등록 실패\n" + (e?.message || ""));
+      }
+    });
+
+    $$('[data-rdel]', wrap).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const rid = btn.getAttribute("data-rdel");
+        if (!rid) return;
+        if (!confirm("이 다시보기를 삭제할까요?")) return;
+
+        const prev = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "삭제중...";
+
+        try {
+          await fetch(`${API_BASE_URL}/api/replays/${encodeURIComponent(rid)}`, {
+            method: "DELETE",
+            headers: await apiHeaders(),
+          });
+          const rp = getReplays();
+          rp[classId] = (rp[classId] || []).filter((x) => x.id !== rid);
+          setReplays(rp);
+          renderList();
+        } catch (e) {
+          console.error(e);
+          alert("다시보기 삭제 실패\n" + (e?.message || ""));
+        } finally {
+          btn.disabled = false;
+          btn.textContent = prev;
+        }
+      });
+    });
+
+    refreshReplayButtons(canWatch);
+  }
+
+  await loadReplays();
+  renderList();
 }
+
 
 // ---------------------------
 // ? CREATE / DASH / LIVE
@@ -2616,7 +2447,7 @@ function handleCreateClassPage() {
     reader.readAsDataURL(f);
   });
 
-  form.addEventListener("submit", (e) => {
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
 
     const title = ($("#cTitle")?.value || "").trim();
@@ -2631,23 +2462,23 @@ function handleCreateClassPage() {
       return;
     }
 
-    const classes = getClasses();
-    const newC = {
-      id: "c_" + Date.now(),
-      title,
-      teacher: user.name,
-      category,
-      description,
-      weeklyPrice,
-      monthlyPrice,
-      thumb: thumbDataUrl || FALLBACK_THUMB
-    };
-
-    classes.unshift(newC);
-    setClasses(classes);
-
-    alert("수업 생성 완료!");
-    location.href = "teacher_dashboard.html";
+    try {
+      await apiPost("/api/classes", {
+        title,
+        category,
+        description,
+        weeklyPrice,
+        monthlyPrice,
+        thumbUrl: thumbDataUrl || FALLBACK_THUMB,
+      });
+      const refreshed = await apiGet("/api/classes").catch(() => []);
+      setClasses(refreshed || []);
+      alert("수업 생성 완료!");
+      location.href = "teacher_dashboard.html";
+    } catch (e) {
+      console.error(e);
+      alert("수업 생성 실패\n" + (e?.message || ""));
+    }
   });
 }
 
@@ -2702,21 +2533,7 @@ function loadTeacherDashboard() {
 
   $$('[data-del]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-del');
-      if (!confirm('정말 삭제할까요?')) return;
-
-      const all = getClasses().filter(c => c.id !== id);
-      setClasses(all);
-
-      const rp = getReplays();
-      delete rp[id];
-      setReplays(rp);
-
-      const en = getEnrollments();
-      Object.keys(en).forEach(uid => { if (en[uid] && en[uid][id]) delete en[uid][id]; });
-      setEnrollments(en);
-
-      loadTeacherDashboard();
+      alert("서버 삭제 API가 아직 없습니다. 서버 측 삭제 엔드포인트 추가 후 연동하세요.");
     });
   });
 }
@@ -2778,7 +2595,7 @@ function loadStudentDashboard() {
   });
 }
 
-function loadLivePage() {
+async function loadLivePage() {
   const root = $("#liveRoot");
   if (!root) return;
 
@@ -2791,7 +2608,7 @@ function loadLivePage() {
   const user = getUser();
   if (!user) { alert("로그인이 필요합니다."); location.href = "login.html"; return; }
 
-  const isOwnerTeacher = (user.role === "teacher" && user.name === c.teacher);
+  const isOwnerTeacher = (user.role === "teacher" && ((user.id && c.teacherId && user.id === c.teacherId) || user.name === c.teacher));
   const isStudentActive = (user.role === "student" && isEnrollmentActiveForUser(user, classId));
 
   if (!isOwnerTeacher && user.role === "student" && !isStudentActive) {
@@ -2805,24 +2622,100 @@ function loadLivePage() {
 
   $("#sideSessionsLink")?.setAttribute("href", `class_detail.html?id=${encodeURIComponent(classId)}#sessions`);
 
-  // 화면비율 변경(데모)
+  // 화면비율 변경
   const arSelect = $("#arSelect");
   arSelect?.addEventListener("change", () => {
     const v = arSelect.value || "16/9";
     document.documentElement.style.setProperty("--liveAR", v);
   });
 
-  // 카메라/마이크 연결(로컬 프리뷰) + 화면 공유(선택)
+  // LiveKit 연결/제어
+  async function ensureLiveKitClient() {
+    const LK_VERSION = "2.16.1";
+
+    const resolveLK = () => {
+      // UMD 전역 이름을 모두 확인하고, 없으면 별칭을 설정
+      let candidate = window.LiveKit || window.LivekitClient || window.livekitClient || window.livekit;
+
+      // UMD 번들에서 default로 감싸진 경우를 처리
+      if (candidate && candidate.default && (candidate.default.connect || candidate.default.Room)) {
+        candidate = candidate.default;
+      }
+
+      if (!window.LiveKit && candidate) window.LiveKit = candidate;
+      if (!window.LivekitClient && candidate) window.LivekitClient = candidate;
+
+      const lk = candidate || window.LiveKit || window.LivekitClient || window.livekitClient || window.livekit;
+      if (lk && (lk.connect || lk.Room)) {
+        window.LiveKit = window.LiveKit || lk;
+        window.LivekitClient = window.LivekitClient || lk;
+      }
+      return lk;
+    };
+
+    let LK = resolveLK();
+    if (LK && LK.connect) return LK;
+
+    // 로컬 번들 강제 로드 (Live Server에서 404/304 캐싱될 때를 대비)
+    await new Promise((resolve) => {
+      const script = document.createElement("script");
+    script.src = "vendor/livekit-client.umd.js?v=" + Date.now();
+    script.crossOrigin = "anonymous";
+    script.onload = resolve;
+    script.onerror = resolve;
+    document.head.appendChild(script);
+  });
+  LK = resolveLK();
+  if (LK && LK.connect) return LK;
+
+  // 최종 CDN fallback
+  // 1) UMD
+  await new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = `https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.umd.min.js`;
+    script.crossOrigin = "anonymous";
+    script.onload = resolve;
+    script.onerror = resolve;
+    document.head.appendChild(script);
+  });
+  LK = resolveLK();
+  if (LK && LK.connect) return LK;
+
+  // 2) ESM 동적 import (jsdelivr, 명시 버전)
+  try {
+    const mod = await import(`https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.esm.mjs`);
+    LK = mod?.default || mod;
+    if (LK && (LK.connect || LK.Room)) {
+      window.LiveKit = window.LiveKit || LK;
+      window.LivekitClient = window.LivekitClient || LK;
+      return LK;
+    }
+  } catch (_) {
+    // ignore
+  }
+
+  return LK;
+}
+
+  const LK = await ensureLiveKitClient();
+  if (!LK || !(LK.connect || LK.Room)) {
+    alert("LiveKit 클라이언트가 로드되지 않았습니다. (네트워크/CORS/스크립트 경로를 확인하세요)");
+    return;
+  }
+
   const videoFrame = $("#videoFrame");
   const liveVideo = $("#liveVideo");
   const videoOverlay = $("#videoOverlay");
   const btnConnect = $("#btnConnect");
   const btnShare = $("#btnShare");
+  const remoteWrap = $("#remoteVideos");
 
   let connected = false;
-  let cameraStream = null;
-  let screenStream = null;
-  let mode = "camera"; // camera | screen
+  let room = null;
+  let localCamTrack = null;
+  let localMicTrack = null;
+  let screenPub = null;
+  const remoteEls = new Map(); // pubSid -> element
 
   function setOverlay(text) {
     if (!videoOverlay) return;
@@ -2830,75 +2723,86 @@ function loadLivePage() {
     videoOverlay.style.display = text ? "grid" : "none";
   }
 
-  function attachStream(stream) {
-    if (!liveVideo) return;
-    liveVideo.srcObject = stream;
-    // 로컬 프리뷰는 무조건 mute (하울링 방지)
-    liveVideo.muted = true;
-    const p = liveVideo.play?.();
-    if (p && typeof p.catch === "function") p.catch(() => {});
-  }
-
-  function stopStream(stream) {
+  function attachLocal(track) {
+    if (!track || !liveVideo) return;
     try {
-      stream?.getTracks?.().forEach(t => t.stop());
-    } catch (e) {}
+      track.attach(liveVideo);
+      liveVideo.muted = true;
+      const p = liveVideo.play?.();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch (e) {
+      console.error(e);
+    }
   }
 
-  async function startCamera() {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("이 브라우저에서 카메라/마이크를 지원하지 않습니다.");
-    }
-    cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    return cameraStream;
+  function addRemote(track, publication, participant) {
+    if (!remoteWrap) return;
+    if (!publication?.sid) return;
+    const sid = publication.sid;
+
+    // 기존 요소 제거
+    removeRemote(sid);
+
+    const box = document.createElement("div");
+    box.className = "remoteItem";
+
+    const label = document.createElement("div");
+    label.className = "remoteLabel";
+    label.textContent = participant?.name || participant?.identity || "참여자";
+    box.appendChild(label);
+
+    const vid = document.createElement("video");
+    vid.autoplay = true;
+    vid.playsInline = true;
+    vid.controls = false;
+    box.appendChild(vid);
+
+    try { track.attach(vid); } catch (e) { console.error(e); }
+    remoteWrap.appendChild(box);
+    remoteEls.set(sid, box);
   }
 
-  async function startScreen() {
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      throw new Error("이 브라우저에서 화면 공유를 지원하지 않습니다.");
-    }
-    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-    const vt = screenStream.getVideoTracks?.()[0];
-    // 사용자가 '공유 중지'를 누르면 자동으로 카메라로 복귀
-    vt?.addEventListener?.("ended", () => {
-      if (mode === "screen") {
-        stopStream(screenStream);
-        screenStream = null;
-        mode = "camera";
-        if (cameraStream) attachStream(cameraStream);
-        if (btnShare) btnShare.textContent = "화면 공유";
-        setOverlay("");
-      }
-    });
-    return screenStream;
+  function removeRemote(sid) {
+    if (!sid) return;
+    const el = remoteEls.get(sid);
+    if (el?.parentElement) el.parentElement.removeChild(el);
+    remoteEls.delete(sid);
   }
 
   function setConnectedUI(isOn) {
     connected = isOn;
     if (btnConnect) btnConnect.textContent = connected ? "연결 해제" : "카메라/마이크 연결";
     if (!connected) {
-      if (liveVideo) liveVideo.srcObject = null;
+      if (liveVideo) {
+        if (liveVideo.srcObject) liveVideo.srcObject = null;
+        liveVideo.removeAttribute("srcObject");
+      }
       setOverlay("카메라/마이크 연결 후 시작할 수 있어요");
       if (btnShare) {
         btnShare.textContent = "화면 공유";
-        // 학생/미지원 환경에서도 버튼은 남겨두되 연결 전엔 동작 X
       }
       return;
     }
     setOverlay("");
   }
 
-  // 페이지 이동/닫힘 시 카메라/화면 공유 스트림 정리
-  function stopAllStreams() {
-    stopStream(screenStream);
-    stopStream(cameraStream);
-    screenStream = null;
-    cameraStream = null;
-    mode = "camera";
+  async function disconnectRoom() {
+    try {
+      if (room) room.disconnect();
+    } catch (_) {}
+    room = null;
+    localCamTrack = null;
+    localMicTrack = null;
+    if (screenPub) {
+      try { room?.localParticipant?.unpublishTrack(screenPub.track, true); } catch (_) {}
+      screenPub = null;
+    }
+    remoteEls.forEach(el => el?.remove?.());
+    remoteEls.clear();
     setConnectedUI(false);
   }
 
-  window.addEventListener("beforeunload", stopAllStreams);
+  window.addEventListener("beforeunload", disconnectRoom);
 
   // 화면 공유는 수강 중(선생님/학생) 모두 가능
   if (btnShare) {
@@ -2908,26 +2812,46 @@ function loadLivePage() {
 
   btnConnect?.addEventListener("click", async () => {
     if (connected) {
-      // 연결 해제
-      stopStream(screenStream);
-      stopStream(cameraStream);
-      screenStream = null;
-      cameraStream = null;
-      mode = "camera";
-      setConnectedUI(false);
+      await disconnectRoom();
       return;
     }
 
     try {
       setOverlay("연결 중...");
-      const s = await startCamera();
-      attachStream(s);
-      mode = "camera";
+      const tk = await apiPost("/api/live/token", { classId });
+      const { url, token } = tk || {};
+      if (!url || !token) throw new Error("LiveKit 토큰을 받을 수 없습니다.");
+
+      room = new LK.Room();
+      await room.connect(url, token, { autoSubscribe: true });
+
+      // 로컬 트랙 발행
+      localCamTrack = await LK.createLocalVideoTrack();
+      localMicTrack = await LK.createLocalAudioTrack();
+      await room.localParticipant.publishTrack(localCamTrack);
+      await room.localParticipant.publishTrack(localMicTrack);
+      attachLocal(localCamTrack);
+
+      // 원격 트랙 핸들러
+      room.on(LK.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (track.kind === "video") {
+          addRemote(track, publication, participant);
+        } else if (track.kind === "audio") {
+          try { track.attach(); } catch (_) {}
+        }
+      });
+      room.on(LK.RoomEvent.TrackUnsubscribed, (_track, publication) => {
+        removeRemote(publication?.sid);
+      });
+      room.on(LK.RoomEvent.Disconnected, () => {
+        disconnectRoom();
+      });
+
       setConnectedUI(true);
     } catch (err) {
       console.error(err);
-      setConnectedUI(false);
-      alert("카메라/마이크 연결에 실패했습니다.\n- 브라우저 권한을 허용했는지 확인하세요.\n- HTTPS/localhost 환경인지 확인하세요.\n\n" + (err?.message || ""));
+      await disconnectRoom();
+      alert("라이브 연결에 실패했습니다.\n- 브라우저 카메라/마이크 권한\n- .env의 LIVEKIT_URL/API_KEY/API_SECRET\n- HTTPS/localhost 환경을 확인하세요.\n\n" + (err?.message || ""));
     }
   });
 
@@ -2939,19 +2863,22 @@ function loadLivePage() {
     }
 
     try {
-      if (mode !== "screen") {
+      if (!screenPub) {
         setOverlay("화면 공유 시작 중...");
-        const ss = await startScreen();
-        attachStream(ss);
-        mode = "screen";
+        const tracks = await LK.createLocalScreenTracks({ audio: false });
+        const vTrack = tracks.find(t => t.kind === "video");
+        if (!vTrack) throw new Error("화면 공유 트랙 생성 실패");
+        screenPub = await room.localParticipant.publishTrack(vTrack);
+        attachLocal(vTrack);
         if (btnShare) btnShare.textContent = "화면 공유 중지";
         setOverlay("");
       } else {
-        stopStream(screenStream);
-        screenStream = null;
-        mode = "camera";
-        if (cameraStream) attachStream(cameraStream);
+        try {
+          room.localParticipant.unpublishTrack(screenPub.track, true);
+        } catch (_) {}
+        screenPub = null;
         if (btnShare) btnShare.textContent = "화면 공유";
+        if (localCamTrack) attachLocal(localCamTrack);
       }
     } catch (err) {
       console.error(err);
@@ -2970,7 +2897,7 @@ function loadLivePage() {
   let recordChunks = [];
 
   if (btnRecord) {
-    if (!isOwnerTeacher) {
+      if (!isOwnerTeacher) {
       setGateDisabled(btnRecord, true);
       btnRecord.textContent = "녹화(선생님 전용)";
     } else {
@@ -3023,26 +2950,25 @@ function loadLivePage() {
         recorder.onstop = async () => {
           try {
             const blob = new Blob(recordChunks, { type: recordChunks?.[0]?.type || "video/webm" });
-            const vodKey = `vod_${classId}_${Date.now()}`;
+            const vodUrl = await blobToDataUrl(blob);
+            const title = `(${new Date().toLocaleDateString("ko-KR")}) ${c.title} · 세션${sessionNo} · 다시보기`;
 
-            await vodPut(vodKey, blob);
-
-            const rp = getReplays();
-            rp[classId] = rp[classId] || [];
-            rp[classId].unshift({
-              id: "r_" + Date.now(),
-              title: `(${new Date().toLocaleDateString("ko-KR")}) ${c.title} · 세션${sessionNo} · 다시보기`,
-              createdAt: new Date().toISOString(),
-              vodKey,
-              mime: blob.type
+            await apiPost(`/api/classes/${encodeURIComponent(classId)}/replays`, {
+              title,
+              vodUrl,
+              mime: blob.type || null,
             });
+            const refreshed = await apiGet(`/api/classes/${encodeURIComponent(classId)}/replays`).catch(() => []);
+            const rp = getReplays();
+            rp[classId] = refreshed || [];
             setReplays(rp);
+            renderReplaysList(classId);
 
-            if (recordHint) recordHint.textContent = "? 녹화가 저장되었고, 다시보기에 등록했습니다.";
+            if (recordHint) recordHint.textContent = "✔ 녹화가 저장되었고, 다시보기에 등록했습니다.";
             alert("녹화를 종료했고, 다시보기에 등록했습니다.");
           } catch (e) {
             console.error(e);
-            if (recordHint) recordHint.textContent = "?? 녹화 저장에 실패했습니다.";
+            if (recordHint) recordHint.textContent = "✖ 녹화 저장에 실패했습니다.";
             alert("녹화 저장 실패\n" + (e?.message || ""));
           } finally {
             recordChunks = [];
@@ -3073,32 +2999,37 @@ function loadLivePage() {
   const chatInput = $("#chatInput");
   const chatSend = $("#chatSend");
 
-  function renderChat() {
+  async function renderChat() {
     if (!chatLog) return;
-    const all = getChat();
-    const list = all[classId] || [];
+    try {
+      const list = await apiGet(`/api/classes/${encodeURIComponent(classId)}/chat`);
+      const all = getChat();
+      all[classId] = list || [];
+      setChat(all);
+    } catch (e) {
+      console.error(e);
+    }
+
+    const list = (getChat()[classId] || []);
     chatLog.innerHTML = list.map(m => `
-      <div class="msg ${m.emailKey === normalizeEmail(user.email) ? "me" : ""}">
-        <div class="mmeta">${escapeHtml(m.name || "-")} · ${new Date(m.at).toLocaleTimeString("ko-KR")}</div>
-        <div class="mtext">${escapeHtml(m.text || "")}</div>
+      <div class="msg ${m.userId === user.id ? "me" : ""}">
+        <div class="mmeta">${escapeHtml(m.name || m.userId || "-")} · ${new Date(m.sentAt || m.at).toLocaleTimeString("ko-KR")}</div>
+        <div class="mtext">${escapeHtml(m.message || m.text || "")}</div>
       </div>
     `).join("");
     chatLog.scrollTop = chatLog.scrollHeight;
   }
 
-  function pushChat(text) {
+  async function pushChat(text) {
     const t = String(text || "").trim();
     if (!t) return;
-    const all = getChat();
-    all[classId] = all[classId] || [];
-    all[classId].push({
-      name: user.name,
-      emailKey: normalizeEmail(user.email),
-      text: t,
-      at: new Date().toISOString()
-    });
-    setChat(all);
-    renderChat();
+    try {
+      await apiPost(`/api/classes/${encodeURIComponent(classId)}/chat`, { message: t });
+      await renderChat();
+    } catch (e) {
+      console.error(e);
+      alert("채팅 전송 실패");
+    }
   }
 
   chatSend?.addEventListener("click", () => pushChat(chatInput?.value));
@@ -3112,16 +3043,13 @@ function loadLivePage() {
   renderChat();
 
   $("#btnLeave")?.addEventListener("click", () => {
-    stopAllStreams();
+    disconnectRoom();
     location.href = `class_detail.html?id=${encodeURIComponent(classId)}`;
   });
 
   // 출석 로그(학생 활성 수강자만)
   if (user?.role === "student" && activeStudent) {
-    const att = getAttendance();
-    att[classId] = att[classId] || [];
-    att[classId].push({ email: user.email, at: new Date().toISOString() });
-    setAttendance(att);
+    apiPost(`/api/classes/${encodeURIComponent(classId)}/attendance`, {}).catch(console.error);
   }
 }
 
@@ -3134,10 +3062,11 @@ function init() {
   normalizeCurrentUserInStorage(); // ? 핵심
   installGateBlockerOnce();        // ? <a> disabled blocking
 
-  ensureSeedData().then(() => {
-    updateNav();
-    runReveal();
+  // NAV 먼저 렌더하여 느린 API 때문에 UI가 비지 않도록 함
+  updateNav();
+  runReveal();
 
+  ensureSeedData().then(() => {
     if ($("#homePopular")) loadHomePopular();
     if ($("#classGrid")) loadClassesPage();
     if ($("#detailRoot")) loadClassDetailPage();

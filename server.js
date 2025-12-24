@@ -7,13 +7,14 @@ app.use(cors());
 app.use(express.json());
 
 // ===== Gmail SMTP 설정 =====
+// Use env first; fallback to legacy hardcoded values (replace with your own)
 const SMTP_CONFIG = {
-  host: 'smtp.gmail.com',
-  port: 587,
+  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: Number(process.env.SMTP_PORT || 587),
   secure: false,
   auth: {
-    user: 'soong0105@gmail.com',
-    pass: 'jogsnvugkovhjumq'
+    user: process.env.SMTP_USER || 'soong0105@gmail.com',
+    pass: process.env.SMTP_PASS || 'jogsnvugkovhjumq'
   }
 };
 

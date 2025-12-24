@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LessonBay - 라이브</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- LiveKit 웹 클라이언트 (vendor 복사본 사용) -->
+  <script src="vendor/livekit-client.umd.js"></script>
   <script src="script.js" defer></script>
 </head>
 <body>
@@ -37,6 +40,7 @@
               <video id="liveVideo" class="liveVideo" autoplay playsinline muted></video>
               <div class="videoOverlay" id="videoOverlay">카메라/마이크 연결 후 시작할 수 있어요 (데모)</div>
             </div>
+            <div id="remoteVideos" class="remoteGrid"></div>
 
             <div class="controlsRow">
               <button class="btn primary" id="btnConnect">카메라/마이크 연결</button>

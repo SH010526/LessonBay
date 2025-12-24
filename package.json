@@ -1,16 +1,28 @@
-﻿{
+{
   "name": "lessonbay-backend",
   "version": "1.0.0",
   "description": "LessonBay Backend - Email OTP",
-  "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node api/server.js",
+    "dev": "node api/server.js",
+    "otp": "node server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy"
   },
   "dependencies": {
+    "@prisma/client": "^5.21.1",
+    "@supabase/supabase-js": "^2.48.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
-    "nodemailer": "^6.9.7",
-    "cors": "^2.8.5"
+    "helmet": "^7.0.0",
+    "livekit-client": "^2.16.1",
+    "livekit-server-sdk": "^2.15.0",
+    "morgan": "^1.10.0",
+    "nodemailer": "^6.9.7"
+  },
+  "devDependencies": {
+    "prisma": "^5.21.1"
   }
 }
-
