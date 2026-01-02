@@ -1505,7 +1505,8 @@ const clientDir = path.join(__dirname, "..", "online_class_platform_v4");
 app.use((req, res, next) => {
   if (req.path.endsWith(".html")) {
     const without = req.path.replace(/\.html$/, "") || "/";
-    return res.redirect(301, without);
+    const query = req.originalUrl.replace(req.path, "");
+    return res.redirect(301, `${without}${query || ""}`);
   }
   next();
 });
