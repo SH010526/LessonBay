@@ -1511,8 +1511,27 @@ async function loadClassDetailPage() {
 
   const id = getParam("id");
   const classes = getClasses();
-  const c = classes.find(x => x.id === id);
+  let c = classes.find(x => x.id === id);
   const user = getUser();
+
+  // 단독 접속 시 목록이 비어 있어도 상세 조회는 가능하도록 API에서 재시도
+  if (!c && id) {
+    try {
+      const remote = await apiGet(`/api/classes/${encodeURIComponent(id)}`);
+      if (remote) {
+        c = {
+          ...remote,
+          teacher: remote.teacher?.name || remote.teacherName || remote.teacher || "-",
+          teacherId: remote.teacherId || remote.teacher?.id || "",
+          thumb: remote.thumbUrl || remote.thumb || FALLBACK_THUMB,
+        };
+        const next = [...classes.filter(x => x.id !== c.id), c];
+        setClasses(next);
+      }
+    } catch (e) {
+      console.error("class detail fetch failed", e);
+    }
+  }
 
   if (!c) {
     $("#detailTitle").textContent = "수업을 찾을 수 없습니다.";
