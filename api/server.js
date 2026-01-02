@@ -67,10 +67,20 @@ const envOrigins = (process.env.FRONTEND_ORIGINS || "")
   .map(o => o.trim())
   .filter(Boolean);
 const allowOrigins = envOrigins.length ? envOrigins : defaultOrigins;
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowOrigins.includes(origin)) return true;
+  // Railway 도메인 자동 허용
+  if (origin.endsWith(".railway.app")) return true;
+  if (process.env.RAILWAY_PUBLIC_DOMAIN && origin.includes(process.env.RAILWAY_PUBLIC_DOMAIN)) return true;
+  if (process.env.RAILWAY_PRIVATE_DOMAIN && origin.includes(process.env.RAILWAY_PRIVATE_DOMAIN)) return true;
+  return false;
+}
+
 app.use(cors({
   origin(origin, callback) {
-    if (!origin) return callback(null, true); // 모바일 앱/포스트맨 등
-    if (allowOrigins.includes(origin)) return callback(null, true);
+    if (isAllowedOrigin(origin)) return callback(null, true);
     return callback(new Error("CORS: 허용되지 않은 도메인입니다."), false);
   },
   credentials: true,
