@@ -743,6 +743,23 @@ function normalizeCurrentUserInStorage() { /* no-op: localStorage 미사용 */ }
 // ---------------------------
 // ? SEED
 // ---------------------------
+async function loadLocalSampleClasses() {
+  try {
+    const res = await fetch("data/classes.json", { cache: "no-cache" });
+    if (!res.ok) return [];
+    const list = await res.json();
+    return (list || []).map(c => ({
+      ...c,
+      teacher: c.teacher || c.teacherName || "-",
+      teacherId: c.teacherId || "",
+      thumb: c.thumb || FALLBACK_THUMB,
+    }));
+  } catch (err) {
+    console.warn("local sample classes load failed", err);
+    return [];
+  }
+}
+
 async function ensureSeedData() {
   // Supabase 세션 동기화
   await syncLocalUserFromSupabaseSession();
@@ -757,10 +774,14 @@ async function ensureSeedData() {
       teacherId: c.teacherId || c.teacher?.id || "",
       thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
     }));
-    setClasses(normalized);
+    if (normalized.length === 0) {
+      setClasses(await loadLocalSampleClasses());
+    } else {
+      setClasses(normalized);
+    }
   } catch (e) {
     console.error("classes fetch failed", e);
-    setClasses([]);
+    setClasses(await loadLocalSampleClasses());
   }
 
   // 내 수강 정보 로드
@@ -1530,6 +1551,17 @@ async function loadClassDetailPage() {
       }
     } catch (e) {
       console.error("class detail fetch failed", e);
+    }
+  }
+
+  // API/캐시 모두 없으면 로컬 샘플에서라도 찾아본다
+  if (!c && id) {
+    const fallback = await loadLocalSampleClasses();
+    const found = fallback.find(x => x.id === id);
+    if (found) {
+      const merged = [...classes.filter(x => x.id !== found.id), found];
+      setClasses(merged);
+      c = found;
     }
   }
 
