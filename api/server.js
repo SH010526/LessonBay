@@ -5,7 +5,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const { PrismaClient, PlanType, EnrollmentStatus } = require("@prisma/client");
 const { createClient } = require("@supabase/supabase-js");
-const { AccessToken } = require("livekit-server-sdk");
+const { AccessToken, RoomServiceClient } = require("livekit-server-sdk");
 const nodemailer = require("nodemailer");
 
 const app = express();
@@ -57,11 +57,18 @@ async function requireAuth(req, res, next) {
     if (error || !data?.user) return res.status(401).json({ error: "토큰이 유효하지 않습니다." });
 
     const u = data.user;
+    // 정지 상태 체크 (Prisma user 기준, 기간 포함)
+    const dbUser = await prisma.user.findUnique({ where: { id: u.id } });
+    if (dbUser) {
+      const suspended = dbUser.status === "suspended" || (dbUser.suspendedUntil && new Date(dbUser.suspendedUntil) > new Date());
+      if (suspended) return res.status(403).json({ error: "정지된 계정입니다. 관리자에게 문의하세요." });
+    }
+
     req.user = {
       id: u.id,
       email: u.email,
       name: u.user_metadata?.name || u.email?.split("@")[0] || "user",
-      role: u.user_metadata?.role === "teacher" ? "teacher" : "student",
+      role: u.user_metadata?.role === "teacher" ? "teacher" : u.user_metadata?.role === "admin" ? "admin" : "student",
     };
     return next();
   } catch (err) {
@@ -73,6 +80,13 @@ async function requireAuth(req, res, next) {
 function requireTeacher(req, res, next) {
   if (req.user?.role !== "teacher") {
     return res.status(403).json({ error: "선생님 권한이 필요합니다." });
+  }
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== "admin") {
+    return res.status(403).json({ error: "관리자 권한이 필요합니다." });
   }
   next();
 }
@@ -100,14 +114,29 @@ function ensureLivekitConfig() {
   }
 }
 
-// Supabase 세션 기준으로 Prisma User 존재 보장
+function getLivekitAdminClient() {
+  const LK_URL = (process.env.LIVEKIT_URL || "").trim();
+  const LK_KEY = (process.env.LIVEKIT_API_KEY || "").trim();
+  const LK_SECRET = (process.env.LIVEKIT_API_SECRET || "").trim();
+  if (!LK_URL || !LK_KEY || !LK_SECRET) return null;
+
+  // wss://... -> https://... 로 변환 (RoomService는 HTTP(S) 엔드포인트 사용)
+  const adminUrl = LK_URL.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+  return new RoomServiceClient(adminUrl, LK_KEY, LK_SECRET);
+}
+
+// Supabase 세션 기준으로 Prisma User 존재 보장 + 기본 active
 async function ensureUserExists(req) {
   if (!req?.user?.id) return null;
+  const safeEmail = req.user.email || `${req.user.id}@lessonbay.local`;
+  const derivedName = req.user.name || (safeEmail.includes("@") ? safeEmail.split("@")[0] : "사용자");
   const payload = {
     id: req.user.id,
-    email: req.user.email || `${req.user.id}@lessonbay.local`,
-    name: req.user.name || req.user.email || "user",
-    role: req.user.role === "teacher" ? "teacher" : "student",
+    email: safeEmail,
+    name: derivedName,
+    role: req.user.role === "teacher" ? "teacher" : req.user.role === "admin" ? "admin" : "student",
+    status: "active",
+    suspendedUntil: null,
   };
   try {
     const u = await prisma.user.upsert({
@@ -118,6 +147,37 @@ async function ensureUserExists(req) {
     return u;
   } catch (e) {
     console.error("ensureUserExists failed:", e);
+    return null;
+  }
+}
+
+// Supabase userId 기준으로 Prisma User 보장 (admin API에서 사용)
+async function ensureUserRecordById(userId) {
+  if (!userId) return null;
+  try {
+    const { data, error } = await supabase.auth.admin.getUserById(userId);
+    if (error || !data?.user) return null;
+    const u = data.user;
+    const meta = u.user_metadata || {};
+    const email = u.email || `${u.id}@lessonbay.local`;
+    const name = meta.name || (email.includes("@") ? email.split("@")[0] : "사용자");
+    const role = meta.role === "teacher" ? "teacher" : meta.role === "admin" ? "admin" : "student";
+
+    const record = await prisma.user.upsert({
+      where: { id: u.id },
+      update: { email, name, role },
+      create: {
+        id: u.id,
+        email,
+        name,
+        role,
+        status: "active",
+        suspendedUntil: null,
+      },
+    });
+    return record;
+  } catch (e) {
+    console.error("ensureUserRecordById failed:", e);
     return null;
   }
 }
@@ -349,6 +409,42 @@ app.post("/api/classes", requireAuth, requireTeacher, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "수업 생성 실패" });
+  }
+});
+
+// 수업 삭제 (선생님 본인 또는 관리자)
+app.delete("/api/classes/:id", requireAuth, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const cls = await prisma.class.findUnique({ where: { id: classId } });
+    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
+
+    const isOwner = req.user.role === "teacher" && cls.teacherId === req.user.id;
+    const isAdmin = req.user.role === "admin";
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: "삭제 권한이 없습니다." });
+    }
+
+    await prisma.$transaction([
+      prisma.assignmentSubmission.deleteMany({ where: { assignment: { classId } } }),
+      prisma.assignment.deleteMany({ where: { classId } }),
+      prisma.qnaComment.deleteMany({ where: { qna: { classId } } }),
+      prisma.qna.deleteMany({ where: { classId } }),
+      prisma.review.deleteMany({ where: { classId } }),
+      prisma.chatMessage.deleteMany({ where: { classId } }),
+      prisma.attendance.deleteMany({ where: { classId } }),
+      prisma.progress.deleteMany({ where: { classId } }),
+      prisma.replay.deleteMany({ where: { classId } }),
+      prisma.material.deleteMany({ where: { classId } }),
+      prisma.enrollment.deleteMany({ where: { classId } }),
+      prisma.session.deleteMany({ where: { classId } }),
+      prisma.class.delete({ where: { id: classId } }),
+    ]);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "수업 삭제 실패" });
   }
 });
 
@@ -617,6 +713,7 @@ app.post("/api/classes/:id/assignments", requireAuth, requireTeacher, async (req
 
 app.post("/api/assignments/:id/submissions", requireAuth, requireStudent, async (req, res) => {
   try {
+    await ensureUserExists(req);
     const assignmentId = req.params.id;
     const { content, fileUrl } = req.body;
     const assignment = await prisma.assignment.findUnique({ where: { id: assignmentId } });
@@ -626,24 +723,34 @@ app.post("/api/assignments/:id/submissions", requireAuth, requireStudent, async 
     if (access.error) return res.status(404).json({ error: access.error });
     if (!access.isActiveStudent) return res.status(403).json({ error: "수강 중인 학생만 제출할 수 있습니다." });
 
-    const sub = await prisma.assignmentSubmission.upsert({
-      where: { assignmentId_studentId: { assignmentId, studentId: req.user.id } },
-      update: {
-        content: content || null,
-        fileUrl: fileUrl || null,
-        submittedAt: new Date(),
-      },
-      create: {
-        assignmentId,
-        studentId: req.user.id,
-        content: content || null,
-        fileUrl: fileUrl || null,
-      },
+    const existing = await prisma.assignmentSubmission.findFirst({
+      where: { assignmentId, studentId: req.user.id },
     });
+
+    let sub = null;
+    if (existing) {
+      sub = await prisma.assignmentSubmission.update({
+        where: { id: existing.id },
+        data: {
+          content: content || null,
+          fileUrl: fileUrl || null,
+          submittedAt: new Date(),
+        },
+      });
+    } else {
+      sub = await prisma.assignmentSubmission.create({
+        data: {
+          assignmentId,
+          studentId: req.user.id,
+          content: content || null,
+          fileUrl: fileUrl || null,
+        },
+      });
+    }
     res.status(201).json(sub);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "과제 제출 실패" });
+    console.error("Assignment submit error:", err);
+    res.status(500).json({ error: "과제 제출 실패", detail: err?.message || String(err) });
   }
 });
 
@@ -657,10 +764,16 @@ app.get("/api/classes/:id/reviews", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "수강 중인 학생만 리뷰를 볼 수 있습니다." });
     }
 
-    const list = await prisma.review.findMany({
+    const listRaw = await prisma.review.findMany({
       where: { classId },
       orderBy: { createdAt: "desc" },
+      include: { user: { select: { id: true, name: true, email: true } } },
     });
+    const list = listRaw.map(r => ({
+      ...r,
+      userName: r.user?.name || null,
+      userEmail: r.user?.email || null,
+    }));
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -670,6 +783,7 @@ app.get("/api/classes/:id/reviews", requireAuth, async (req, res) => {
 
 app.post("/api/classes/:id/reviews", requireAuth, requireStudent, async (req, res) => {
   try {
+    await ensureUserExists(req);
     const classId = req.params.id;
     const { rating, comment } = req.body;
     if (!rating) return res.status(400).json({ error: "rating이 필요합니다." });
@@ -700,11 +814,30 @@ app.get("/api/classes/:id/qna", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "수강 중인 학생만 Q&A를 볼 수 있습니다." });
     }
 
-    const list = await prisma.qna.findMany({
+    const listRaw = await prisma.qna.findMany({
       where: { classId },
       orderBy: { createdAt: "desc" },
-      include: { comments: { orderBy: { createdAt: "asc" } } },
+      include: {
+        user: { select: { id: true, name: true, email: true, role: true } },
+        comments: {
+          orderBy: { createdAt: "asc" },
+          include: { user: { select: { id: true, name: true, email: true, role: true } } },
+        },
+      },
     });
+    const list = listRaw.map(q => ({
+      ...q,
+      userName: q.user?.name || null,
+      userEmail: q.user?.email || null,
+      userRole: q.user?.role || null,
+      replies: (q.comments || []).map(c => ({
+        ...c,
+        userName: c.user?.name || null,
+        userEmail: c.user?.email || null,
+        userRole: c.user?.role || null,
+      })),
+      comments: undefined, // replies로 별칭
+    }));
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -714,6 +847,7 @@ app.get("/api/classes/:id/qna", requireAuth, async (req, res) => {
 
 app.post("/api/classes/:id/qna", requireAuth, async (req, res) => {
   try {
+    await ensureUserExists(req);
     const classId = req.params.id;
     const { question } = req.body;
     if (!question) return res.status(400).json({ error: "question이 필요합니다." });
@@ -726,8 +860,15 @@ app.post("/api/classes/:id/qna", requireAuth, async (req, res) => {
 
     const q = await prisma.qna.create({
       data: { classId, userId: req.user.id, question },
+      include: { user: { select: { id: true, name: true, email: true, role: true } } },
     });
-    res.status(201).json(q);
+    res.status(201).json({
+      ...q,
+      userName: q.user?.name || null,
+      userEmail: q.user?.email || null,
+      userRole: q.user?.role || null,
+      replies: [],
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Q&A 저장 실패" });
@@ -736,6 +877,7 @@ app.post("/api/classes/:id/qna", requireAuth, async (req, res) => {
 
 app.post("/api/qna/:id/comments", requireAuth, async (req, res) => {
   try {
+    await ensureUserExists(req);
     const qnaId = req.params.id;
     const { comment } = req.body;
     if (!comment) return res.status(400).json({ error: "comment가 필요합니다." });
@@ -751,8 +893,14 @@ app.post("/api/qna/:id/comments", requireAuth, async (req, res) => {
 
     const c = await prisma.qnaComment.create({
       data: { qnaId, userId: req.user.id, comment },
+      include: { user: { select: { id: true, name: true, email: true, role: true } } },
     });
-    res.status(201).json(c);
+    res.status(201).json({
+      ...c,
+      userName: c.user?.name || null,
+      userEmail: c.user?.email || null,
+      userRole: c.user?.role || null,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "댓글 저장 실패" });
@@ -769,10 +917,16 @@ app.get("/api/classes/:id/chat", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "수강 중인 학생만 채팅을 볼 수 있습니다." });
     }
 
-    const list = await prisma.chatMessage.findMany({
+    const listRaw = await prisma.chatMessage.findMany({
       where: { classId },
       orderBy: { sentAt: "asc" },
+      include: { user: { select: { id: true, name: true, email: true } } },
     });
+    const list = listRaw.map(m => ({
+      ...m,
+      userName: m.user?.name || null,
+      userEmail: m.user?.email || null,
+    }));
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -782,6 +936,7 @@ app.get("/api/classes/:id/chat", requireAuth, async (req, res) => {
 
 app.post("/api/classes/:id/chat", requireAuth, async (req, res) => {
   try {
+    await ensureUserExists(req);
     const classId = req.params.id;
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: "message가 필요합니다." });
@@ -794,8 +949,14 @@ app.post("/api/classes/:id/chat", requireAuth, async (req, res) => {
 
     const m = await prisma.chatMessage.create({
       data: { classId, userId: req.user.id, message },
+      include: { user: { select: { id: true, name: true, email: true } } },
     });
-    res.status(201).json(m);
+    res.status(201).json({
+      ...m,
+      userName: m.user?.name || null,
+      userEmail: m.user?.email || null,
+      userRole: m.user?.role || null,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "채팅 전송 실패" });
@@ -889,6 +1050,107 @@ app.post("/api/classes/:id/progress", requireAuth, requireStudent, async (req, r
   }
 });
 
+// Admin: 사용자 정지/해제
+app.post("/api/admin/users/:id/suspend", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const targetId = req.params.id;
+    const untilRaw = req.body?.until || null;
+    const reason = req.body?.reason || null;
+    let until = null;
+    if (untilRaw) {
+      const t = new Date(untilRaw);
+      if (!Number.isNaN(t.getTime())) until = t;
+    }
+    // 보장된 사용자 레코드 확보(없으면 auth에서 가져오고, 실패 시 기본값으로 생성)
+    let ensured = await prisma.user.findUnique({ where: { id: targetId } });
+    if (!ensured) ensured = await ensureUserRecordById(targetId);
+
+    // 항상 upsert로 상태를 기록해, Prisma에 사용자 레코드가 없어도 정지 처리가 되도록 함
+    const createdFallback = {
+      id: targetId,
+      email: `${targetId}@lessonbay.local`,
+      name: "사용자",
+      role: "student",
+      status: "active",
+      suspendedUntil: null,
+    };
+    await prisma.user.upsert({
+      where: { id: targetId },
+      create: createdFallback,
+      update: { status: "suspended", suspendedUntil: until },
+    });
+    res.json({ ok: true, status: "suspended", suspendedUntil: until });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "정지 처리 실패" });
+  }
+});
+
+app.post("/api/admin/users/:id/unsuspend", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const targetId = req.params.id;
+    let ensured = await prisma.user.findUnique({ where: { id: targetId } });
+    if (!ensured) ensured = await ensureUserRecordById(targetId);
+
+    const createdFallback = {
+      id: targetId,
+      email: `${targetId}@lessonbay.local`,
+      name: "사용자",
+      role: "student",
+      status: "active",
+      suspendedUntil: null,
+    };
+    await prisma.user.upsert({
+      where: { id: targetId },
+      create: createdFallback,
+      update: { status: "active", suspendedUntil: null },
+    });
+    res.json({ ok: true, status: "active" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "정지 해제 실패" });
+  }
+});
+
+// Admin: 사용자 목록
+app.get("/api/admin/users", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    // Supabase auth 기준 사용자 목록 조회
+    const { data, error } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (error) throw error;
+
+    const authUsers = data?.users || [];
+    const ids = authUsers.map((u) => u.id);
+
+    // Prisma User 테이블의 상태/정지정보 매핑
+    const localUsers = await prisma.user.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, status: true, suspendedUntil: true },
+    });
+    const localMap = Object.fromEntries(localUsers.map((u) => [u.id, u]));
+
+    const list = authUsers.map((u) => {
+      const meta = u.user_metadata || {};
+      const local = localMap[u.id] || {};
+      return {
+        id: u.id,
+        email: u.email,
+        name: meta.name || (u.email ? u.email.split("@")[0] : "사용자"),
+        role: meta.role || "student",
+        status: local.status || "active",
+        suspendedUntil: local.suspendedUntil || null,
+        createdAt: u.created_at,
+        lastSignInAt: u.last_sign_in_at,
+      };
+    });
+
+    res.json(list);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "사용자 목록 조회 실패" });
+  }
+});
+
 // LiveKit 토큰 발급 (선생님: 본인 수업만, 학생: 수강중인 수업만)
 app.post("/api/live/token", requireAuth, async (req, res) => {
   try {
@@ -934,6 +1196,33 @@ app.post("/api/live/token", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("LiveKit token error:", err);
     res.status(500).json({ error: "LiveKit 토큰 발급 실패", detail: err?.message || String(err) });
+  }
+});
+
+// Live: 강퇴 (선생님 본인 수업 또는 관리자)
+app.post("/api/live/kick", requireAuth, async (req, res) => {
+  try {
+    ensureLivekitConfig();
+    const { classId, userId } = req.body || {};
+    if (!classId || !userId) return res.status(400).json({ error: "classId와 userId가 필요합니다." });
+
+    const cls = await prisma.class.findUnique({ where: { id: classId }, select: { id: true, teacherId: true, title: true } });
+    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
+
+    const isOwner = req.user.role === "teacher" && req.user.id === cls.teacherId;
+    const isAdmin = req.user.role === "admin";
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: "강퇴 권한이 없습니다." });
+    }
+
+    const client = getLivekitAdminClient();
+    if (!client) throw new Error("LiveKit 관리 클라이언트 생성 실패");
+
+    await client.removeParticipant(classId, userId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("LiveKit kick error:", err);
+    res.status(500).json({ error: "강퇴 실패", detail: err?.message || String(err) });
   }
 });
 

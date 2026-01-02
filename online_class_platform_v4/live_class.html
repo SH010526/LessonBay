@@ -33,14 +33,19 @@
         <div class="panel">
           <div class="panelHead">
             <h3>라이브 영상 영역</h3>
-            <div class="muted2" style="font-size:12px; font-weight:950;">데모 UI</div>
+            <div class="muted2" style="font-size:12px; font-weight:950;">라이브 준비</div>
           </div>
           <div class="panelBody">
             <div class="videoFrame" id="videoFrame">
               <video id="liveVideo" class="liveVideo" autoplay playsinline muted></video>
-              <div class="videoOverlay" id="videoOverlay">카메라/마이크 연결 후 시작할 수 있어요 (데모)</div>
+              <div class="videoOverlay" id="videoOverlay">카메라/마이크를 연결하면 라이브가 시작됩니다.</div>
             </div>
             <div id="remoteVideos" class="remoteGrid"></div>
+            <div class="remotePager">
+              <button class="btn" id="remotePrev">이전</button>
+              <span class="muted" id="remotePageInfo" style="margin:0 8px;">0/0</span>
+              <button class="btn" id="remoteNext">다음</button>
+            </div>
 
             <div class="controlsRow">
               <button class="btn primary" id="btnConnect">카메라/마이크 연결</button>

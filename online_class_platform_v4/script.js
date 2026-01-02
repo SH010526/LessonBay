@@ -143,10 +143,11 @@ async function syncLocalUserFromSupabaseSession() {
   if (!supabaseClient) return;
 
   try {
-    const { data, error } = await supabaseClient.auth.getSession();
-    if (error) return;
+    // 최신 메타데이터 반영을 위해 세션 새로고침
+    const { data: refData } = await supabaseClient.auth.refreshSession();
+    const sessionData = refData?.session ? refData : (await supabaseClient.auth.getSession()).data;
+    const session = sessionData?.session || null;
 
-    const session = data?.session || null;
     if (!session || !session.user) {
       userCache = null;
       return;
@@ -155,8 +156,9 @@ async function syncLocalUserFromSupabaseSession() {
     const u = session.user;
     const email = String(u.email || "").trim();
     const name = String(u.user_metadata?.name || "").trim() || (email ? email.split("@")[0] : "사용자");
-    const role = (u.user_metadata?.role === "teacher" || u.user_metadata?.role === "student")
-      ? u.user_metadata.role
+    const roleMeta = u.user_metadata?.role;
+    const role = (roleMeta === "teacher" || roleMeta === "student" || roleMeta === "admin")
+      ? roleMeta
       : "student";
 
     userCache = { id: u.id, name, role, email };
@@ -351,6 +353,23 @@ function escapeHtml(s) {
   return String(s ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+function displayUserName(obj) {
+  const pick = (v) => (v && String(v).trim()) ? String(v).trim() : "";
+  const name = pick(obj?.userName) || pick(obj?.name) || pick(obj?.user?.name);
+  if (name) return name;
+  const email = pick(obj?.userEmail) || pick(obj?.email) || pick(obj?.user?.email);
+  if (email && email.includes("@")) return email.split("@")[0] || "사용자";
+  const id = pick(obj?.userId) || pick(obj?.id) || pick(obj?.user?.id);
+  if (id && id.includes("-") && id.length > 15) return "사용자";
+  if (id) return id;
+  return "사용자";
+}
+function displayUserRole(obj) {
+  const role = (obj?.userRole || obj?.role || obj?.user?.role || "").toLowerCase();
+  if (role === "teacher") return "선생님";
+  if (role === "student") return "학생";
+  return "사용자";
 }
 function escapeAttr(s) { return escapeHtml(s); }
 async function blobToDataUrl(blob) {
@@ -603,23 +622,6 @@ async function ensureSeedData() {
   await syncLocalUserFromSupabaseSession();
   const user = getUser();
 
-  async function loadLocalClassesFallback() {
-    try {
-      const res = await fetch("data/classes.json", { cache: "no-cache" });
-      if (!res.ok) throw new Error("local classes fetch failed");
-      const json = await res.json();
-      const normalized = (json || []).map(c => ({
-        ...c,
-        teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
-        thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
-      }));
-      setClasses(normalized);
-    } catch (err) {
-      console.error("local classes load failed", err);
-      setClasses([]);
-    }
-  }
-
   // 수업 목록 로드 (API → 비어 있으면 로컬 예제)
   try {
     const classes = await apiGet("/api/classes");
@@ -630,12 +632,9 @@ async function ensureSeedData() {
       thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
     }));
     setClasses(normalized);
-    if (!normalized.length) {
-      await loadLocalClassesFallback();
-    }
   } catch (e) {
     console.error("classes fetch failed", e);
-    await loadLocalClassesFallback();
+    setClasses([]);
   }
 
   // 내 수강 정보 로드
@@ -708,9 +707,15 @@ function updateNav() {
 
   const roleBadge = user.role === "teacher"
     ? `<span class="badge teacher">선생님</span>`
-    : `<span class="badge student">학생</span>`;
+    : user.role === "admin"
+      ? `<span class="badge teacher">관리자</span>`
+      : `<span class="badge student">학생</span>`;
 
-  const dashHref = user.role === "teacher" ? "teacher_dashboard.html" : "student_dashboard.html";
+  const dashHref = user.role === "teacher"
+    ? "teacher_dashboard.html"
+    : user.role === "admin"
+      ? "settings.html"
+      : "student_dashboard.html";
 
   navRight.innerHTML = `
     <span class="user-pill">
@@ -817,10 +822,15 @@ function handleSignupPage() {
     const email = pickValue("suEmail", "signupEmail", "email").trim();
     const pw = pickValue("suPass", "signupPw", "password", "pw");
     const role = pickValue("suRole", "signupRole", "role") || "student";
+    const agree = $("#suAgree")?.checked || false;
     const msg = ensureMsgEl();
 
     if (!name || !email || !pw) {
       msg.textContent = "이름/이메일/비밀번호를 입력하세요.";
+      return;
+    }
+    if (!agree) {
+      msg.textContent = "약관 및 개인정보 처리방침에 동의해야 가입할 수 있습니다.";
       return;
     }
 
@@ -982,6 +992,8 @@ function handleSettingsPage() {
   const root = $("#settingsRoot");
   if (!root) return;
 
+  // 최신 role 반영 (메타데이터 변경 후 재로그인 없이도 동기화 시도)
+  syncLocalUserFromSupabaseSession().catch(() => {});
   const user = getUser();
   if (!user) { location.href = "login.html"; return; }
 
@@ -1034,6 +1046,111 @@ function handleSettingsPage() {
       setBtnLoading(delBtn, false);
     }
   });
+
+  // 관리자 패널
+  if (user.role === "admin") {
+    const mount = document.getElementById("adminPanelMount") || root;
+    const panel = document.createElement("div");
+    panel.className = "card pad-lg";
+    panel.style.marginTop = "16px";
+    panel.innerHTML = `
+      <div class="h2">관리자 패널</div>
+      <div class="muted" style="margin-top:6px;">사용자 정지/해제</div>
+      <div style="margin-top:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <button class="btn" id="adminRefreshBtn">새로고침</button>
+        <input id="adminSearch" class="input" placeholder="이름/이메일 검색" style="min-width:220px;">
+        <span class="muted" id="adminMsg" style="font-size:12px;"></span>
+      </div>
+      <div id="adminUserList" style="margin-top:12px;"></div>
+    `;
+    mount.appendChild(panel);
+
+    const msgEl = panel.querySelector("#adminMsg");
+    const listEl = panel.querySelector("#adminUserList");
+    const refreshBtn = panel.querySelector("#adminRefreshBtn");
+    const searchEl = panel.querySelector("#adminSearch");
+    let lastData = [];
+
+    const renderList = (items) => {
+      lastData = items || [];
+      const keyword = (searchEl?.value || "").trim().toLowerCase();
+      const filtered = keyword
+        ? lastData.filter(u =>
+            (u.name || "").toLowerCase().includes(keyword) ||
+            (u.email || "").toLowerCase().includes(keyword)
+          )
+        : lastData;
+      if (!Array.isArray(items) || !items.length) {
+        listEl.innerHTML = `<div class="muted" style="font-size:13px;">사용자가 없습니다.</div>`;
+        return;
+      }
+      listEl.innerHTML = filtered.map(u => `
+        <div class="session-item">
+          <div>
+            <div class="session-title">${escapeHtml(u.name || u.email || u.id || "사용자")}</div>
+            <div class="session-sub">
+              ${escapeHtml(u.email || "")} · 역할: ${escapeHtml(u.role || "")} · 상태: ${escapeHtml(u.status || "")}
+              ${u.suspendedUntil ? ` · 정지 해제 예정: ${new Date(u.suspendedUntil).toLocaleString("ko-KR")}` : ""}
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <input type="datetime-local" class="input" data-admin-until="${escapeAttr(u.id)}" style="min-width:180px;" value="${u.suspendedUntil ? escapeAttr(new Date(u.suspendedUntil).toISOString().slice(0,16)) : ""}" />
+            <input type="text" class="input" data-admin-reason="${escapeAttr(u.id)}" placeholder="사유(선택)" style="min-width:160px;" />
+            ${u.status === "suspended"
+              ? `<button class="btn" data-admin-unsuspend="${escapeAttr(u.id)}">정지 해제</button>`
+              : `<button class="btn danger" data-admin-suspend="${escapeAttr(u.id)}">정지</button>`}
+          </div>
+        </div>
+      `).join("");
+    };
+
+    async function loadUsers() {
+      msgEl.textContent = "불러오는 중...";
+      try {
+        const list = await apiGet("/api/admin/users");
+        renderList(list || []);
+        msgEl.textContent = "";
+        // 버튼 바인딩
+        listEl.querySelectorAll("[data-admin-suspend]").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const uid = btn.getAttribute("data-admin-suspend");
+            if (!uid) return;
+            try {
+              msgEl.textContent = "정지 처리 중...";
+              const untilVal = listEl.querySelector(`[data-admin-until="${CSS.escape(uid)}"]`)?.value || null;
+              const reasonVal = listEl.querySelector(`[data-admin-reason="${CSS.escape(uid)}"]`)?.value || null;
+              await apiPost(`/api/admin/users/${encodeURIComponent(uid)}/suspend`, { until: untilVal || null, reason: reasonVal || null });
+              await loadUsers();
+            } catch (e) {
+              console.error(e);
+              msgEl.textContent = e?.message || "정지 실패";
+            }
+          });
+        });
+        listEl.querySelectorAll("[data-admin-unsuspend]").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const uid = btn.getAttribute("data-admin-unsuspend");
+            if (!uid) return;
+            try {
+              msgEl.textContent = "해제 처리 중...";
+              await apiPost(`/api/admin/users/${encodeURIComponent(uid)}/unsuspend`, {});
+              await loadUsers();
+            } catch (e) {
+              console.error(e);
+              msgEl.textContent = e?.message || "해제 실패";
+            }
+          });
+        });
+      } catch (e) {
+        console.error(e);
+        msgEl.textContent = e?.message || "목록 불러오기 실패";
+      }
+    }
+
+    refreshBtn?.addEventListener("click", loadUsers);
+    searchEl?.addEventListener("input", () => renderList(lastData));
+    loadUsers();
+  }
 }
 
 /* ============================
@@ -1186,39 +1303,12 @@ function ensureReplayModalBinding() {
     cleanupVodUrl();
 
     // 영상이 있으면 IndexedDB에서 꺼내서 재생
-    // ? 없으면(예: 이전 데이터에 vodKey만 있고 blob 누락) 데모 영상을 "자동 생성"해서 보여줌
     if (vodVideo) {
       let blob = null;
       let urlToPlay = vodUrl || null;
 
       if (!urlToPlay && vodKey) {
         try { blob = await vodGetBlob(vodKey); } catch (_) { blob = null; }
-      }
-
-      // blob이 없으면: 데모 blob을 만들어서 저장 후 재생
-      if (!urlToPlay && !blob) {
-        try {
-          const newKey = vodKey || `vod_autogen_${Date.now()}`;
-          const demo = await makeDemoVodBlob(title || "VOD");
-          await vodPutBlob(newKey, demo);
-          blob = demo;
-          vodKey = newKey;
-
-          // replays 메타데이터에 vodKey가 없던 케이스면, localStorage에 다시 써서 다음에도 재생되게 함
-          if (classId && replayId) {
-            try {
-              const classes = getClasses();
-              const cls = classes.find(c => c.id === classId);
-              const r = cls?.replays?.find(x => x.id === replayId);
-              if (r) {
-                r.vodKey = vodKey;
-                saveClasses(classes);
-              }
-            } catch (_) {}
-          }
-        } catch (_) {
-          // 생성도 실패하면 빈 상태 유지
-        }
       }
 
       // vodUrl이 우선, 없으면 blob으로 재생
@@ -1962,13 +2052,14 @@ async function loadClassDetailPage() {
     const list = $("#reviewList");
     if (!list) return;
     const revs = getReviews()[c.id] || [];
+    const showName = (r) => escapeHtml(displayUserName(r));
     const avg = revs.length ? (revs.reduce((s,r)=>s+(r.rating||0),0)/revs.length).toFixed(1) : "-";
     list.innerHTML = `
       <div class="muted" style="margin-bottom:8px;">평점: ${avg} / 5 (${revs.length}명)</div>
       ${revs.length ? revs.map(r => `
         <div class="session-item">
           <div>
-            <div class="session-title">★ ${r.rating} · ${escapeHtml(r.userId || r.userName || r.userEmail || "")}</div>
+            <div class="session-title">★ ${r.rating} · ${showName(r)}</div>
             <div class="session-sub">${new Date(r.createdAt || r.at).toLocaleString("ko-KR")}</div>
             <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(r.comment || r.text || "")}</div>
           </div>
@@ -1980,16 +2071,18 @@ async function loadClassDetailPage() {
   function renderQna() {
     const list = $("#qnaList");
     if (!list) return;
+    const nameOf = (obj) => escapeHtml(displayUserName(obj));
+    const roleOf = (obj) => escapeHtml(displayUserRole(obj));
   const qnas = getQna()[c.id] || [];
   list.innerHTML = qnas.length ? qnas.map(q => `
     <div class="session-item">
       <div>
           <div class="session-title">${escapeHtml(q.question || q.text || "")}</div>
-          <div class="session-sub">${new Date(q.createdAt || q.at || Date.now()).toLocaleString("ko-KR")} · ${escapeHtml(q.userName || q.userEmail || "사용자")}</div>
+          <div class="session-sub">${new Date(q.createdAt || q.at || Date.now()).toLocaleString("ko-KR")} · ${nameOf(q)} (${roleOf(q)})</div>
           <div style="margin-top:8px; display:grid; gap:6px;">
             ${(q.replies || []).map(r => `
               <div class="session-sub" style="background:rgba(15,23,42,.04); padding:6px 8px; border-radius:10px;">
-                <strong>${escapeHtml(r.userName || r.userEmail || r.userId || "")}</strong><br/>
+                <strong>${nameOf(r)} (${roleOf(r)})</strong><br/>
                 ${escapeHtml(r.text || r.comment || "")} <span style="color:var(--muted2);">(${new Date(r.at || r.createdAt || Date.now()).toLocaleString("ko-KR")})</span>
               </div>
             `).join("")}
@@ -2533,7 +2626,21 @@ function loadTeacherDashboard() {
 
   $$('[data-del]').forEach(btn => {
     btn.addEventListener('click', () => {
-      alert("서버 삭제 API가 아직 없습니다. 서버 측 삭제 엔드포인트 추가 후 연동하세요.");
+      const id = btn.getAttribute('data-del');
+      if (!id) return;
+      if (!confirm("해당 수업을 삭제할까요? (관련 녹화/자료/과제/채팅도 함께 삭제됩니다)")) return;
+      (async () => {
+        try {
+          await apiRequest(`/api/classes/${encodeURIComponent(id)}`, "DELETE");
+          const refreshed = await apiGet("/api/classes").catch(() => []);
+          setClasses(refreshed || []);
+          alert("수업을 삭제했습니다.");
+          loadTeacherDashboard(); // 리스트 갱신
+        } catch (e) {
+          console.error(e);
+          alert("수업 삭제 실패\n" + (e?.message || ""));
+        }
+      })();
     });
   });
 }
@@ -2709,13 +2816,19 @@ async function loadLivePage() {
   const btnConnect = $("#btnConnect");
   const btnShare = $("#btnShare");
   const remoteWrap = $("#remoteVideos");
+  const remotePrev = $("#remotePrev");
+  const remoteNext = $("#remoteNext");
+  const remotePageInfo = $("#remotePageInfo");
 
   let connected = false;
   let room = null;
   let localCamTrack = null;
   let localMicTrack = null;
   let screenPub = null;
-  const remoteEls = new Map(); // pubSid -> element
+  const remoteList = []; // [{sid, el}]
+  let remotePage = 0;
+  const REMOTE_PER_PAGE = 16; // 4x4
+  renderRemotePage();
 
   function setOverlay(text) {
     if (!videoOverlay) return;
@@ -2735,12 +2848,28 @@ async function loadLivePage() {
     }
   }
 
-  function addRemote(track, publication, participant) {
+  function renderRemotePage() {
     if (!remoteWrap) return;
+    const total = remoteList.length;
+    const totalPage = total ? Math.ceil(total / REMOTE_PER_PAGE) : 1;
+    if (remotePage >= totalPage) remotePage = Math.max(0, totalPage - 1);
+
+    remoteWrap.innerHTML = "";
+    const start = remotePage * REMOTE_PER_PAGE;
+    const slice = remoteList.slice(start, start + REMOTE_PER_PAGE);
+    slice.forEach(item => remoteWrap.appendChild(item.el));
+
+    if (remotePageInfo) {
+      remotePageInfo.textContent = `${total ? remotePage + 1 : 0}/${totalPage} · 참여자 ${total}명`;
+    }
+    if (remotePrev) remotePrev.disabled = remotePage <= 0;
+    if (remoteNext) remoteNext.disabled = remotePage >= totalPage - 1;
+  }
+
+  function addRemote(track, publication, participant) {
     if (!publication?.sid) return;
     const sid = publication.sid;
 
-    // 기존 요소 제거
     removeRemote(sid);
 
     const box = document.createElement("div");
@@ -2751,6 +2880,27 @@ async function loadLivePage() {
     label.textContent = participant?.name || participant?.identity || "참여자";
     box.appendChild(label);
 
+    // 선생님/관리자만 보이는 강퇴 버튼
+    if (isOwnerTeacher) {
+      const kickBtn = document.createElement("button");
+      kickBtn.className = "btn danger";
+      kickBtn.style.padding = "6px 10px";
+      kickBtn.style.fontSize = "12px";
+      kickBtn.textContent = "강퇴";
+      kickBtn.addEventListener("click", async () => {
+        const targetName = participant?.name || participant?.identity || "참여자";
+        if (!confirm(`${targetName} 을(를) 강퇴할까요?`)) return;
+        try {
+          await apiPost("/api/live/kick", { classId, userId: participant?.identity });
+          removeRemote(sid);
+        } catch (e) {
+          console.error(e);
+          alert("강퇴 실패\n" + (e?.message || ""));
+        }
+      });
+      box.appendChild(kickBtn);
+    }
+
     const vid = document.createElement("video");
     vid.autoplay = true;
     vid.playsInline = true;
@@ -2758,15 +2908,16 @@ async function loadLivePage() {
     box.appendChild(vid);
 
     try { track.attach(vid); } catch (e) { console.error(e); }
-    remoteWrap.appendChild(box);
-    remoteEls.set(sid, box);
+
+    remoteList.push({ sid, el: box });
+    renderRemotePage();
   }
 
   function removeRemote(sid) {
     if (!sid) return;
-    const el = remoteEls.get(sid);
-    if (el?.parentElement) el.parentElement.removeChild(el);
-    remoteEls.delete(sid);
+    const idx = remoteList.findIndex(r => r.sid === sid);
+    if (idx >= 0) remoteList.splice(idx, 1);
+    renderRemotePage();
   }
 
   function setConnectedUI(isOn) {
@@ -2797,8 +2948,8 @@ async function loadLivePage() {
       try { room?.localParticipant?.unpublishTrack(screenPub.track, true); } catch (_) {}
       screenPub = null;
     }
-    remoteEls.forEach(el => el?.remove?.());
-    remoteEls.clear();
+    remoteList.splice(0, remoteList.length);
+    renderRemotePage();
     setConnectedUI(false);
   }
 
@@ -2809,6 +2960,18 @@ async function loadLivePage() {
     setGateDisabled(btnShare, false);
     btnShare.textContent = "화면 공유";
   }
+
+  // 원격 페이징 버튼
+  remotePrev?.addEventListener("click", () => {
+    if (remotePage > 0) {
+      remotePage -= 1;
+      renderRemotePage();
+    }
+  });
+  remoteNext?.addEventListener("click", () => {
+    remotePage += 1;
+    renderRemotePage();
+  });
 
   btnConnect?.addEventListener("click", async () => {
     if (connected) {
@@ -2998,6 +3161,7 @@ async function loadLivePage() {
   const chatLog = $("#chatLog");
   const chatInput = $("#chatInput");
   const chatSend = $("#chatSend");
+  const displayName = (m) => escapeHtml(displayUserName(m));
 
   async function renderChat() {
     if (!chatLog) return;
@@ -3013,7 +3177,7 @@ async function loadLivePage() {
     const list = (getChat()[classId] || []);
     chatLog.innerHTML = list.map(m => `
       <div class="msg ${m.userId === user.id ? "me" : ""}">
-        <div class="mmeta">${escapeHtml(m.name || m.userId || "-")} · ${new Date(m.sentAt || m.at).toLocaleTimeString("ko-KR")}</div>
+        <div class="mmeta">${displayName(m)} · ${new Date(m.sentAt || m.at).toLocaleTimeString("ko-KR")}</div>
         <div class="mtext">${escapeHtml(m.message || m.text || "")}</div>
       </div>
     `).join("");

@@ -12,6 +12,7 @@ datasource db {
 enum Role {
   student
   teacher
+  admin
 }
 
 enum PlanType {
@@ -25,11 +26,18 @@ enum EnrollmentStatus {
   cancelled
 }
 
+enum UserStatus {
+  active
+  suspended
+}
+
 model User {
   id        String   @id // Supabase auth user id
   email     String   @unique
   name      String
   role      Role     @default(student)
+  status    UserStatus @default(active)
+  suspendedUntil DateTime?
   createdAt DateTime @default(now())
 
   classes      Class[]             @relation("TeacherClasses")
