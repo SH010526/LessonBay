@@ -47,7 +47,15 @@ app.use(helmet({
       "default-src": ["'self'", "data:", "blob:", "https://cdn.jsdelivr.net", "https://*.supabase.co"],
       "script-src": ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://*.supabase.co"],
       "style-src": ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
-      "img-src": ["'self'", "data:", "blob:", "https://cdn.jsdelivr.net"],
+      // supabase storage/unsplash 썸네일 허용
+      "img-src": [
+        "'self'",
+        "data:",
+        "blob:",
+        "https://cdn.jsdelivr.net",
+        "https://*.supabase.co",
+        "https://images.unsplash.com",
+      ],
       "connect-src": ["'self'", "https://*.supabase.co", "wss://*.supabase.co", "https://*.livekit.cloud", "wss://*.livekit.cloud"],
     },
   },
