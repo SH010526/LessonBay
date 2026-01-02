@@ -1480,6 +1480,28 @@ app.delete("/api/replays/:id", requireAuth, requireTeacher, async (req, res) => 
 
 // Static frontend (online_class_platform_v4)
 const clientDir = path.join(__dirname, "..", "online_class_platform_v4");
+
+// 깔끔한 주소: .html 요청이면 확장자 없는 경로로 리다이렉트
+app.use((req, res, next) => {
+  if (req.path.endsWith(".html")) {
+    const without = req.path.replace(/\.html$/, "") || "/";
+    return res.redirect(301, without);
+  }
+  next();
+});
+
+// 확장자 없이 들어오면 대응하는 .html이 있으면 서빙
+app.use((req, res, next) => {
+  if (!path.extname(req.path)) {
+    const clean = req.path === "/" ? "/index" : req.path.replace(/\/+$/, "");
+    const candidate = path.join(clientDir, `${clean}.html`);
+    if (fs.existsSync(candidate)) {
+      return res.sendFile(candidate);
+    }
+  }
+  next();
+});
+
 app.use(express.static(clientDir));
 app.get("*", (req, res) => {
   res.sendFile(path.join(clientDir, "index.html"));
