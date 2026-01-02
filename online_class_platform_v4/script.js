@@ -37,16 +37,36 @@ function ensureSupabaseClient() {
 }
 ensureSupabaseClient();
 
-// OTP 백엔드 API
-const API_BASE_URL = (() => {
-  if (typeof window !== "undefined" && window.location) {
-    const origin = window.location.origin || "";
-    // 프로덕션(railway/custom 도메인)은 동일 origin 사용
-    if (origin.includes("railway.app") || origin.includes("lessonbay")) return origin;
-    // 로컬 5500(정적)에서 백엔드 3000으로 우회
-    if (origin.includes("127.0.0.1:5500") || origin.includes("localhost:5500")) return "http://localhost:3000";
-    return origin || "http://localhost:3000";
+// OTP 백엔드 API (HTTPS 환경에서도 강제로 HTTP를 섞지 않도록 보정)
+function normalizeBaseUrl(url) {
+  if (!url) return "";
+  try {
+    const u = new URL(url, window?.location?.href || "");
+    // 페이지가 HTTPS라면 HTTP를 HTTPS로 자동 승격
+    const protocol = u.protocol === "http:" && window?.location?.protocol === "https:" ? "https:" : u.protocol;
+    return `${protocol}//${u.host}`;
+  } catch (_) {
+    return url;
   }
+}
+
+const API_BASE_URL = (() => {
+  const hasWindow = typeof window !== "undefined";
+
+  if (hasWindow) {
+    // URL 쿼리(api_base)나 글로벌 변수로 API 주소를 강제 지정 가능 (테스트/배포 대응)
+    const search = new URLSearchParams(window.location.search || "");
+    const override = window.API_BASE_URL || window.__API_BASE_URL__ || search.get("api_base");
+    if (override) return normalizeBaseUrl(override);
+
+    const origin = window.location?.origin || "";
+    // 프로덕션(railway/custom 도메인)은 동일 origin 사용
+    if (origin.includes("railway.app") || origin.includes("lessonbay")) return normalizeBaseUrl(origin);
+    // 로컬 5500(정적)에서 백엔드 3000으로 우회
+    if (origin.includes("127.0.0.1:5500") || origin.includes("localhost:5500")) return normalizeBaseUrl("http://localhost:3000");
+    return normalizeBaseUrl(origin || "http://localhost:3000");
+  }
+
   return "http://localhost:3000";
 })();
 
@@ -799,12 +819,14 @@ async function ensureSeedData() {
       thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
     }));
     if (normalized.length === 0) {
+      showToast("API 수업 목록이 비어 있어 데모 데이터를 표시합니다.", "warn", 4500);
       setClasses(await loadLocalSampleClasses());
     } else {
       setClasses(normalized);
     }
   } catch (e) {
     console.error("classes fetch failed", e);
+    showToast("HTTPS 환경에서 API 접근에 실패해 데모 데이터를 표시합니다.", "warn", 4500);
     setClasses(await loadLocalSampleClasses());
   }
 
