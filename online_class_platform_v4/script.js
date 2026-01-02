@@ -744,19 +744,43 @@ function normalizeCurrentUserInStorage() { /* no-op: localStorage 미사용 */ }
 // ? SEED
 // ---------------------------
 async function loadLocalSampleClasses() {
+  const builtin = [
+    {
+      id: "c_demo_korean_1",
+      title: "영어 회화 입문",
+      teacher: "이승훈",
+      category: "영어",
+      description: "왕초보도 바로 따라올 수 있는 실전 표현과 발음 교정.",
+      weeklyPrice: 19000,
+      monthlyPrice: 59000,
+      thumb: "https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=1400&q=60",
+    },
+    {
+      id: "c_demo_math_1",
+      title: "고등 수학 확률과 통계",
+      teacher: "이승훈",
+      category: "수학",
+      description: "개념부터 기출, 모의고사까지 확률·통계 핵심 정리와 실전 연습.",
+      weeklyPrice: 25000,
+      monthlyPrice: 79000,
+      thumb: "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1400&q=60",
+    },
+  ];
+
   try {
     const res = await fetch("data/classes.json", { cache: "no-cache" });
-    if (!res.ok) return [];
+    if (!res.ok) return builtin;
     const list = await res.json();
-    return (list || []).map(c => ({
+    const normalized = (list || []).map(c => ({
       ...c,
       teacher: c.teacher || c.teacherName || "-",
       teacherId: c.teacherId || "",
       thumb: c.thumb || FALLBACK_THUMB,
     }));
+    return normalized.length ? normalized : builtin;
   } catch (err) {
     console.warn("local sample classes load failed", err);
-    return [];
+    return builtin;
   }
 }
 
