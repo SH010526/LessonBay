@@ -38,7 +38,9 @@ function ensureSupabaseClient() {
 ensureSupabaseClient();
 
 // OTP 백엔드 API
-const API_BASE_URL = "http://localhost:3000";
+const API_BASE_URL = (typeof window !== "undefined" && window.location && window.location.origin)
+  ? window.location.origin
+  : "http://localhost:3000";
 
 // In-memory caches (no localStorage/IndexedDB)
 let userCache = null;
@@ -2706,14 +2708,17 @@ function handleCreateClassPage() {
   const fileInput = $("#cThumbFile");
   const preview = $("#cThumbPreview");
   let thumbDataUrl = "";
+  let thumbFile = null;
 
   fileInput?.addEventListener("change", () => {
     const f = fileInput.files?.[0];
     if (!f) {
       thumbDataUrl = "";
+      thumbFile = null;
       if (preview) preview.style.display = "none";
       return;
     }
+    thumbFile = f;
     const reader = new FileReader();
     reader.onload = () => {
       thumbDataUrl = String(reader.result || "");
@@ -2741,13 +2746,23 @@ function handleCreateClassPage() {
     }
 
     try {
+      let thumbUrlFinal = thumbDataUrl || FALLBACK_THUMB;
+      if (thumbFile) {
+        if (thumbFile.size > 50 * 1024 * 1024) {
+          alert("Supabase 무료 요금제는 파일당 50MB까지만 업로드 가능합니다.");
+          return;
+        }
+        const uploaded = await uploadToSupabaseStorage(thumbFile, "class-thumbs");
+        thumbUrlFinal = uploaded.signedUrl || uploaded.path || FALLBACK_THUMB;
+      }
+
       await apiPost("/api/classes", {
         title,
         category,
         description,
         weeklyPrice,
         monthlyPrice,
-        thumbUrl: thumbDataUrl || FALLBACK_THUMB,
+        thumbUrl: thumbUrlFinal,
       });
       const refreshed = await apiGet("/api/classes").catch(() => []);
       setClasses(refreshed || []);
