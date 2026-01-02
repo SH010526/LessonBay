@@ -540,6 +540,8 @@ app.get("/api/classes/:id", async (req, res) => {
 
 app.post("/api/classes", requireAuth, requireTeacher, async (req, res) => {
   try {
+    // 선생님 사용자 레코드 보장 (FK 오류 방지)
+    await ensureUserExists(req);
     const { title, category, description, weeklyPrice, monthlyPrice, thumbUrl } = req.body;
     if (!title) return res.status(400).json({ error: "제목이 필요합니다." });
 
@@ -569,8 +571,8 @@ app.post("/api/classes", requireAuth, requireTeacher, async (req, res) => {
     });
     res.status(201).json(cls);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "수업 생성 실패" });
+    console.error("class create error:", err);
+    res.status(500).json({ error: "수업 생성 실패", detail: err?.message || String(err) });
   }
 });
 
