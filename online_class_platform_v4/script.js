@@ -38,9 +38,17 @@ function ensureSupabaseClient() {
 ensureSupabaseClient();
 
 // OTP 백엔드 API
-const API_BASE_URL = (typeof window !== "undefined" && window.location && window.location.origin)
-  ? window.location.origin
-  : "http://localhost:3000";
+const API_BASE_URL = (() => {
+  if (typeof window !== "undefined" && window.location) {
+    const origin = window.location.origin || "";
+    // 프로덕션(railway/custom 도메인)은 동일 origin 사용
+    if (origin.includes("railway.app") || origin.includes("lessonbay")) return origin;
+    // 로컬 5500(정적)에서 백엔드 3000으로 우회
+    if (origin.includes("127.0.0.1:5500") || origin.includes("localhost:5500")) return "http://localhost:3000";
+    return origin || "http://localhost:3000";
+  }
+  return "http://localhost:3000";
+})();
 
 // In-memory caches (no localStorage/IndexedDB)
 let userCache = null;
