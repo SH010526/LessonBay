@@ -3,6 +3,8 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
+const fs = require("fs");
+const path = require("path");
 const { PrismaClient, PlanType, EnrollmentStatus } = require("@prisma/client");
 const { createClient } = require("@supabase/supabase-js");
 const { AccessToken, RoomServiceClient } = require("livekit-server-sdk");
@@ -11,6 +13,11 @@ const nodemailer = require("nodemailer");
 const app = express();
 const prisma = new PrismaClient();
 
+// 로그 파일 설정
+const logDir = path.join(__dirname, "..", "logs");
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+const accessLogStream = fs.createWriteStream(path.join(logDir, "access.log"), { flags: "a" });
+
 // Supabase admin client for JWT 검증
 const supabase = createClient(
   process.env.SUPABASE_URL || "https://pqvdexhxytahljultmjd.supabase.co",
@@ -18,14 +25,64 @@ const supabase = createClient(
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
 
-app.use(helmet());
-app.use(cors());
+// HTTPS 리다이렉트 (배포 환경에서 FORCE_HTTPS=1 설정 시 동작)
+app.set("trust proxy", 1);
+app.use((req, res, next) => {
+  if (process.env.FORCE_HTTPS === "1") {
+    const proto = req.headers["x-forwarded-proto"] || req.protocol;
+    if (proto !== "https") {
+      const host = req.headers.host || "";
+      const url = req.originalUrl || "/";
+      return res.redirect(301, `https://${host}${url}`);
+    }
+  }
+  next();
+});
+
+// Helmet + 기본 CSP(배포 시 HTTPS 전제)
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      "default-src": ["'self'", "data:", "blob:", "https://cdn.jsdelivr.net", "https://*.supabase.co"],
+      "script-src": ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://*.supabase.co"],
+      "style-src": ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      "img-src": ["'self'", "data:", "blob:", "https://cdn.jsdelivr.net"],
+      "connect-src": ["'self'", "https://*.supabase.co", "wss://*.supabase.co", "https://*.livekit.cloud", "wss://*.livekit.cloud"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
+
+// CORS: 기본으로 로컬 허용, FRONTEND_ORIGINS(콤마) 지정 시 그 도메인만 허용
+const defaultOrigins = [
+  "http://localhost:5500",
+  "http://127.0.0.1:5500",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+];
+const envOrigins = (process.env.FRONTEND_ORIGINS || "")
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
+const allowOrigins = envOrigins.length ? envOrigins : defaultOrigins;
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true); // 모바일 앱/포스트맨 등
+    if (allowOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("CORS: 허용되지 않은 도메인입니다."), false);
+  },
+  credentials: true,
+}));
 // Allow larger JSON payloads for base64 uploads (materials/replays)
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 app.use(morgan("tiny"));
+app.use(morgan("combined", { stream: accessLogStream }));
 
 const PORT = process.env.PORT || 3000;
+const kickedMap = new Map(); // classId -> Map<userId, expiresAt>
 
 // OTP store (in-memory)
 const otpStore = new Map();
@@ -48,6 +105,29 @@ function bearerToken(req) {
   return raw.slice(7).trim();
 }
 
+// 간단한 IP 기반 rate limit (슬라이딩 윈도우 X, 카운트 리셋)
+function makeRateLimiter({ windowMs, limit }) {
+  const hits = new Map(); // ip -> {count, expires}
+  return (req, res, next) => {
+    const ip = req.ip || "unknown";
+    const now = Date.now();
+    const rec = hits.get(ip);
+    if (rec && rec.expires > now) {
+      if (rec.count >= limit) {
+        return res.status(429).json({ error: "잠시 후 다시 시도하세요. (요청이 너무 많습니다)" });
+      }
+      rec.count += 1;
+      hits.set(ip, rec);
+    } else {
+      hits.set(ip, { count: 1, expires: now + windowMs });
+    }
+    next();
+  };
+}
+
+const otpLimiter = makeRateLimiter({ windowMs: 5 * 60 * 1000, limit: 5 }); // 5분에 5회
+const signupLimiter = makeRateLimiter({ windowMs: 10 * 60 * 1000, limit: 10 }); // 10분에 10회
+
 async function requireAuth(req, res, next) {
   const token = bearerToken(req);
   if (!token) return res.status(401).json({ error: "인증 토큰이 없습니다." });
@@ -57,19 +137,22 @@ async function requireAuth(req, res, next) {
     if (error || !data?.user) return res.status(401).json({ error: "토큰이 유효하지 않습니다." });
 
     const u = data.user;
-    // 정지 상태 체크 (Prisma user 기준, 기간 포함)
-    const dbUser = await prisma.user.findUnique({ where: { id: u.id } });
-    if (dbUser) {
-      const suspended = dbUser.status === "suspended" || (dbUser.suspendedUntil && new Date(dbUser.suspendedUntil) > new Date());
-      if (suspended) return res.status(403).json({ error: "정지된 계정입니다. 관리자에게 문의하세요." });
-    }
-
     req.user = {
       id: u.id,
       email: u.email,
       name: u.user_metadata?.name || u.email?.split("@")[0] || "user",
       role: u.user_metadata?.role === "teacher" ? "teacher" : u.user_metadata?.role === "admin" ? "admin" : "student",
     };
+
+    // Prisma User 보장 + 최신 역할/정지 상태 반영
+    const ensured = await ensureUserExists(req);
+    if (ensured) {
+      // DB에 더 최신 역할/정지 상태가 있으면 이를 우선
+      req.user.role = ensured.role;
+      const suspended = ensured.status === "suspended" || (ensured.suspendedUntil && new Date(ensured.suspendedUntil) > new Date());
+      if (suspended) return res.status(403).json({ error: "정지된 계정입니다. 관리자에게 문의하세요." });
+    }
+
     return next();
   } catch (err) {
     console.error(err);
@@ -124,6 +207,50 @@ function getLivekitAdminClient() {
   const adminUrl = LK_URL.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
   return new RoomServiceClient(adminUrl, LK_KEY, LK_SECRET);
 }
+
+function markKicked(classId, userId, minutes = 5) {
+  if (!classId || !userId) return;
+  const until = Date.now() + minutes * 60 * 1000;
+  if (!kickedMap.has(classId)) kickedMap.set(classId, new Map());
+  kickedMap.get(classId).set(userId, until);
+}
+
+function isKicked(classId, userId) {
+  if (!classId || !userId) return false;
+  const byClass = kickedMap.get(classId);
+  if (!byClass) return false;
+  const until = byClass.get(userId);
+  if (!until) return false;
+  if (Date.now() > until) {
+    byClass.delete(userId);
+    return false;
+  }
+  return true;
+}
+
+function estimateBase64Bytes(str) {
+  if (!str) return 0;
+  const cleaned = String(str).split(",").pop(); // data:...;base64, 제거
+  return Math.floor((cleaned.length * 3) / 4);
+}
+
+// 단순 에러 로거
+function logError(err, req) {
+  try {
+    const line = `[${new Date().toISOString()}] ${req?.method || ""} ${req?.originalUrl || ""} :: ${err?.stack || err}\n`;
+    fs.appendFile(path.join(logDir, "error.log"), line, () => {});
+  } catch (_) {}
+}
+
+// RLS가 켜져 있으면 삽입이 막히므로 비활성화 (Supabase 테이블)
+async function disableRlsIfOn() {
+  try {
+    await prisma.$executeRawUnsafe('ALTER TABLE "public"."Replay" DISABLE ROW LEVEL SECURITY;');
+  } catch (e) {
+    console.error("disableRlsIfOn failed:", e);
+  }
+}
+disableRlsIfOn();
 
 // Supabase 세션 기준으로 Prisma User 존재 보장 + 기본 active
 async function ensureUserExists(req) {
@@ -184,9 +311,18 @@ async function ensureUserRecordById(userId) {
 
 // Routes
 app.get("/health", (req, res) => res.json({ ok: true }));
+app.get("/status", (req, res) => {
+  res.json({
+    ok: true,
+    time: new Date().toISOString(),
+    env: process.env.NODE_ENV || "development",
+    forceHttps: process.env.FORCE_HTTPS === "1",
+    origins: allowOrigins,
+  });
+});
 
 // Auth: service-role 가입 (이메일 확인 없이 바로 활성화)
-app.post("/api/auth/signup", async (req, res) => {
+app.post("/api/auth/signup", signupLimiter, async (req, res) => {
   try {
     const { email, password, name, role } = req.body || {};
     if (!email || !password) {
@@ -209,15 +345,40 @@ app.post("/api/auth/signup", async (req, res) => {
       return res.status(400).json({ error: error.message || "가입 실패" });
     }
 
+    // Prisma에도 즉시 사용자 레코드 생성
+    try {
+      await prisma.user.upsert({
+        where: { id: data.user.id },
+        update: {
+          email,
+          name: meta.name,
+          role: meta.role,
+          status: "active",
+          suspendedUntil: null,
+        },
+        create: {
+          id: data.user.id,
+          email,
+          name: meta.name,
+          role: meta.role,
+          status: "active",
+          suspendedUntil: null,
+        },
+      });
+    } catch (e) {
+      console.error("Prisma user create on signup failed:", e);
+    }
+
     res.status(201).json({ user: data.user });
   } catch (err) {
     console.error(err);
+    logError(err, req);
     res.status(500).json({ error: "회원가입 처리 중 오류" });
   }
 });
 
 // Auth: send OTP (6 digits) by email
-app.post("/api/auth/send-otp", async (req, res) => {
+app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
   try {
     const { email, password, name, role } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: "이메일/비밀번호가 필요합니다." });
@@ -252,6 +413,7 @@ app.post("/api/auth/send-otp", async (req, res) => {
     res.json({ ok: true, message: "인증코드를 이메일로 보냈습니다." });
   } catch (err) {
     console.error(err);
+    logError(err, req);
     res.status(500).json({ error: "OTP 발송 실패" });
   }
 });
@@ -512,6 +674,9 @@ app.get("/api/me/enrollments", requireAuth, async (req, res) => {
 app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
   try {
     const classId = req.params.id;
+    // RLS가 켜져 있으면 삽입이 막히므로 비활성화 시도
+    try { await prisma.$executeRawUnsafe('ALTER TABLE "public"."Replay" DISABLE ROW LEVEL SECURITY;'); } catch (_) {}
+
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
     if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
 
@@ -552,6 +717,9 @@ app.post("/api/classes/:id/replays", requireAuth, requireTeacher, async (req, re
     const classId = req.params.id;
     const { vodUrl, mime, title, sessionId } = req.body;
     if (!vodUrl) return res.status(400).json({ error: "vodUrl이 필요합니다." });
+    const sizeBytes = estimateBase64Bytes(vodUrl);
+    const maxBytes = 50 * 1024 * 1024; // Supabase Storage Free 50MB 한도 기준
+    if (sizeBytes > maxBytes) return res.status(400).json({ error: "영상이 너무 큽니다. 50MB 이하로 올려주세요. (대용량은 스토리지 직접 업로드 방식 권장)" });
 
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
     if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
@@ -639,6 +807,9 @@ app.post("/api/classes/:id/materials", requireAuth, requireTeacher, async (req, 
     const classId = req.params.id;
     const { title, fileUrl, mime } = req.body;
     if (!title || !fileUrl) return res.status(400).json({ error: "title과 fileUrl이 필요합니다." });
+    const sizeBytes = estimateBase64Bytes(fileUrl);
+    const maxBytes = 50 * 1024 * 1024; // Free 플랜 한도
+    if (sizeBytes > maxBytes) return res.status(400).json({ error: "파일이 너무 큽니다. 50MB 이하로 올려주세요." });
 
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
     if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
@@ -711,11 +882,64 @@ app.post("/api/classes/:id/assignments", requireAuth, requireTeacher, async (req
   }
 });
 
+// Assignment 수정 (선생님만)
+app.put("/api/assignments/:id", requireAuth, requireTeacher, async (req, res) => {
+  try {
+    const assignmentId = req.params.id;
+    const { title, description, dueAt } = req.body || {};
+    if (!title) return res.status(400).json({ error: "title이 필요합니다." });
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id: assignmentId },
+      include: { class: { select: { teacherId: true } } },
+    });
+    if (!assignment) return res.status(404).json({ error: "과제를 찾을 수 없습니다." });
+    if (assignment.class.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업의 과제만 수정 가능합니다." });
+
+    const updated = await prisma.assignment.update({
+      where: { id: assignmentId },
+      data: {
+        title,
+        description: description || null,
+        dueAt: dueAt ? new Date(dueAt) : null,
+      },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "과제 수정 실패" });
+  }
+});
+
+// Assignment 삭제 (선생님만)
+app.delete("/api/assignments/:id", requireAuth, requireTeacher, async (req, res) => {
+  try {
+    const assignmentId = req.params.id;
+    const assignment = await prisma.assignment.findUnique({
+      where: { id: assignmentId },
+      include: { class: { select: { teacherId: true } } },
+    });
+    if (!assignment) return res.status(404).json({ error: "과제를 찾을 수 없습니다." });
+    if (assignment.class.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업의 과제만 삭제 가능합니다." });
+
+    await prisma.assignmentSubmission.deleteMany({ where: { assignmentId } });
+    await prisma.assignment.delete({ where: { id: assignmentId } });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "과제 삭제 실패" });
+  }
+});
+
 app.post("/api/assignments/:id/submissions", requireAuth, requireStudent, async (req, res) => {
   try {
     await ensureUserExists(req);
     const assignmentId = req.params.id;
     const { content, fileUrl } = req.body;
+    const sizeBytes = estimateBase64Bytes(fileUrl);
+    const maxBytes = 50 * 1024 * 1024;
+    if (sizeBytes > maxBytes) return res.status(400).json({ error: "첨부파일이 너무 큽니다. 50MB 이하로 올려주세요." });
+
     const assignment = await prisma.assignment.findUnique({ where: { id: assignmentId } });
     if (!assignment) return res.status(404).json({ error: "과제를 찾을 수 없습니다." });
 
@@ -1161,6 +1385,10 @@ app.post("/api/live/token", requireAuth, async (req, res) => {
     const classId = req.body.classId || req.query.classId;
     if (!classId) return res.status(400).json({ error: "classId가 필요합니다." });
 
+    if (isKicked(classId, req.user.id)) {
+      return res.status(403).json({ error: "강퇴된 사용자입니다. 잠시 후 다시 시도하세요." });
+    }
+
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { id: true, teacherId: true, title: true } });
     if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
 
@@ -1203,7 +1431,7 @@ app.post("/api/live/token", requireAuth, async (req, res) => {
 app.post("/api/live/kick", requireAuth, async (req, res) => {
   try {
     ensureLivekitConfig();
-    const { classId, userId } = req.body || {};
+    const { classId, userId, banMinutes } = req.body || {};
     if (!classId || !userId) return res.status(400).json({ error: "classId와 userId가 필요합니다." });
 
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { id: true, teacherId: true, title: true } });
@@ -1218,10 +1446,14 @@ app.post("/api/live/kick", requireAuth, async (req, res) => {
     const client = getLivekitAdminClient();
     if (!client) throw new Error("LiveKit 관리 클라이언트 생성 실패");
 
+    const minutes = Math.max(1, Math.min(1440, Number(banMinutes) || 5)); // 최소 1분, 최대 1일(1440분)
+
     await client.removeParticipant(classId, userId);
-    res.json({ ok: true });
+    markKicked(classId, userId, minutes);
+    res.json({ ok: true, bannedMinutes: minutes });
   } catch (err) {
     console.error("LiveKit kick error:", err);
+    logError(err, req);
     res.status(500).json({ error: "강퇴 실패", detail: err?.message || String(err) });
   }
 });
@@ -1246,9 +1478,11 @@ app.delete("/api/replays/:id", requireAuth, requireTeacher, async (req, res) => 
   }
 });
 
-// 404
-app.use((req, res) => {
-  res.status(404).json({ error: "Not Found" });
+// Static frontend (online_class_platform_v4)
+const clientDir = path.join(__dirname, "..", "online_class_platform_v4");
+app.use(express.static(clientDir));
+app.get("*", (req, res) => {
+  res.sendFile(path.join(clientDir, "index.html"));
 });
 
 // Start

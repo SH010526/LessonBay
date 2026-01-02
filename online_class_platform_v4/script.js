@@ -20,6 +20,7 @@
 
 const SUPABASE_URL = "https://pqvdexhxytahljultmjd.supabase.co";   // Project URL
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxdmRleGh4eXRhaGxqdWx0bWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5NjMzNTMsImV4cCI6MjA4MTUzOTM1M30.WzJWY3-92Bwkic-Wb2rOmZ1joEUj-s69cSL2hPT79fQ";             // anon public key
+const STORAGE_BUCKET = "LessonBay"; // Supabase Storage 버킷 이름
 
 // ? SDK가 없는 페이지에서도 크래시 나지 않게 (전역 supabase와 이름 충돌 방지)
 let supabaseClient = null;
@@ -67,48 +68,135 @@ async function apiHeaders() {
   return h;
 }
 
+// 단순 로딩 오버레이
+let loadingCount = 0;
+let toastTimer = null;
+
+function showToast(msg, type = "info", duration = 3000) {
+  if (!msg) return;
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.style.position = "fixed";
+    el.style.bottom = "20px";
+    el.style.right = "20px";
+    el.style.padding = "12px 14px";
+    el.style.borderRadius = "8px";
+    el.style.color = "#fff";
+    el.style.zIndex = "9999";
+    el.style.boxShadow = "0 6px 16px rgba(0,0,0,0.2)";
+    el.style.fontSize = "14px";
+    document.body.appendChild(el);
+  }
+  const colors = {
+    info: "rgba(55, 114, 255, 0.9)",
+    success: "rgba(40, 167, 69, 0.9)",
+    warn: "rgba(255, 193, 7, 0.9)",
+    danger: "rgba(220, 53, 69, 0.9)",
+  };
+  el.style.background = colors[type] || colors.info;
+  el.textContent = msg;
+  el.style.display = "block";
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.style.display = "none";
+  }, duration);
+}
+
+function showLoading() {
+  loadingCount += 1;
+  let el = document.getElementById("globalLoading");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "globalLoading";
+    el.style.position = "fixed";
+    el.style.inset = "0";
+    el.style.background = "rgba(0,0,0,0.25)";
+    el.style.display = "flex";
+    el.style.alignItems = "center";
+    el.style.justifyContent = "center";
+    el.style.zIndex = "9999";
+    el.style.fontSize = "16px";
+    el.style.color = "#fff";
+    el.style.backdropFilter = "blur(2px)";
+    el.innerHTML = `<div style="padding:14px 18px; background:rgba(0,0,0,0.6); border-radius:10px;">잠시만요... 처리 중이에요</div>`;
+    el.style.display = "none";
+    document.body.appendChild(el);
+  }
+  el.style.display = "flex";
+}
+function hideLoading() {
+  loadingCount = Math.max(0, loadingCount - 1);
+  const el = document.getElementById("globalLoading");
+  if (el && loadingCount === 0) el.style.display = "none";
+}
+
 async function apiGet(path) {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    headers: await apiHeaders(),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  showLoading();
+  try {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      headers: await apiHeaders(),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      showToast(txt || "요청 실패", "danger");
+      throw new Error(txt);
+    }
+    return res.json();
+  } finally {
+    hideLoading();
+  }
 }
 
 async function apiPost(path, body) {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: "POST",
-    headers: await apiHeaders(),
-    body: JSON.stringify(body || {}),
-  });
-  if (res.ok) return res.json();
-
-  // 응답 본문은 한 번만 소비 가능하므로 text로 읽고 JSON 시도
-  const raw = await res.text();
+  showLoading();
   try {
-    const data = raw ? JSON.parse(raw) : null;
-    const msg = data?.detail || data?.error || raw || "알 수 없는 오류";
-    throw new Error(msg);
-  } catch (_) {
-    throw new Error(raw || "알 수 없는 오류");
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method: "POST",
+      headers: await apiHeaders(),
+      body: JSON.stringify(body || {}),
+    });
+    if (res.ok) return res.json();
+
+    // 응답 본문은 한 번만 소비 가능하므로 text로 읽고 JSON 시도
+    const raw = await res.text();
+    try {
+      const data = raw ? JSON.parse(raw) : null;
+      const msg = data?.detail || data?.error || raw || "알 수 없는 오류";
+      showToast(msg, "danger");
+      throw new Error(msg);
+    } catch (_) {
+      showToast(raw || "알 수 없는 오류", "danger");
+      throw new Error(raw || "알 수 없는 오류");
+    }
+  } finally {
+    hideLoading();
   }
 }
 
 // generic request (for DELETE 등)
 async function apiRequest(path, method = "GET", body = null) {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers: await apiHeaders(),
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (res.ok) return res.json();
-  const raw = await res.text();
+  showLoading();
   try {
-    const data = raw ? JSON.parse(raw) : null;
-    const msg = data?.detail || data?.error || raw || "알 수 없는 오류";
-    throw new Error(msg);
-  } catch (_) {
-    throw new Error(raw || "알 수 없는 오류");
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers: await apiHeaders(),
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.ok) return res.json();
+    const raw = await res.text();
+    try {
+      const data = raw ? JSON.parse(raw) : null;
+      const msg = data?.detail || data?.error || raw || "알 수 없는 오류";
+      showToast(msg, "danger");
+      throw new Error(msg);
+    } catch (_) {
+      showToast(raw || "알 수 없는 오류", "danger");
+      throw new Error(raw || "알 수 없는 오류");
+    }
+  } finally {
+    hideLoading();
   }
 }
 
@@ -134,6 +222,34 @@ const K = {
 
 // ? VOD(녹화) 저장소: 메모리 (IndexedDB 사용 안 함)
 const VOD_MEM = new Map(); // vodKey -> Blob
+
+async function uploadToSupabaseStorage(file, prefix = "uploads") {
+  ensureSupabaseClient();
+  if (!supabaseClient) throw new Error("Supabase SDK를 불러올 수 없습니다.");
+  const safeName = (file.name || "file")
+    .replace(/\s+/g, "_")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .slice(0, 120);
+  const path = `${prefix}/${Date.now()}-${safeName}`;
+  const { error } = await supabaseClient.storage.from(STORAGE_BUCKET).upload(path, file, {
+    cacheControl: "3600",
+    upsert: false,
+  });
+  if (error) throw error;
+  // 7일짜리 서명 URL
+  const { data: signed, error: signErr } = await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(path, 60 * 60 * 24 * 7);
+  if (signErr) throw signErr;
+  return { path, signedUrl: signed?.signedUrl || null };
+}
+
+async function resolveStorageUrl(urlOrPath) {
+  ensureSupabaseClient();
+  if (!supabaseClient) return urlOrPath;
+  if (!urlOrPath || /^https?:\/\//i.test(urlOrPath) || urlOrPath.startsWith("data:")) return urlOrPath;
+  const { data, error } = await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(urlOrPath, 60 * 60 * 24);
+  if (error) return urlOrPath;
+  return data?.signedUrl || urlOrPath;
+}
 
 /* ============================
    ? Supabase session -> local user sync
@@ -1697,19 +1813,41 @@ async function loadClassDetailPage() {
     const list = $("#materialList");
     if (!list) return;
     const mats = getMaterials()[c.id] || [];
+    const showUploader = (m) => {
+      const raw = m.uploaderId || m.author || "";
+      const looksUuid = raw.includes("-") && raw.length > 20;
+      return looksUuid ? "" : raw;
+    };
     list.innerHTML = mats.length
       ? mats.map(m => `
         <div class="session-item">
           <div>
             <div class="session-title">${escapeHtml(m.title)}</div>
-            <div class="session-sub">${new Date(m.createdAt || m.at || Date.now()).toLocaleString("ko-KR")} · ${escapeHtml(m.uploaderId || m.author || "")}</div>
+            <div class="session-sub">
+              ${new Date(m.createdAt || m.at || Date.now()).toLocaleString("ko-KR")}
+              ${showUploader(m) ? ` · ${escapeHtml(showUploader(m))}` : ""}
+            </div>
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <a class="btn primary" href="${escapeAttr(m.fileUrl || m.url || "#")}" download>다운로드</a>
+            <a class="btn primary" data-storage-path="${escapeAttr(m.filePath || "")}" href="${escapeAttr(m.fileUrl || m.url || "#")}" download>다운로드</a>
           </div>
         </div>
       `).join("")
       : `<div class="muted" style="font-size:13px;">아직 등록된 자료가 없습니다.</div>`;
+
+    list.querySelectorAll("[data-storage-path]").forEach((a) => {
+      const p = a.getAttribute("data-storage-path");
+      if (!p) return;
+      a.addEventListener("click", async (e) => {
+        e.preventDefault();
+        try {
+          const signed = await resolveStorageUrl(p);
+          window.open(signed, "_blank");
+        } catch (_) {
+          alert("파일을 가져오지 못했습니다. 잠시 후 다시 시도하세요.");
+        }
+      });
+    });
   }
 
   function renderAssignments() {
@@ -1876,11 +2014,33 @@ async function loadClassDetailPage() {
         const desc = (document.getElementById("assignDescInput")?.value || "").trim();
         if (!title) { alert("과제명을 입력하세요."); return; }
         try {
-          await apiPost(`/api/classes/${encodeURIComponent(c.id)}/assignments`, {
-            title,
-            description: desc,
-            dueAt: dueIso,
-          });
+          const editingId = metaBox.dataset.editing;
+          if (editingId) {
+            try {
+              await apiRequest(`/api/assignments/${encodeURIComponent(editingId)}`, "PUT", {
+                title,
+                description: desc,
+                dueAt: dueIso,
+              });
+            } catch (e) {
+              if ((e?.message || "").includes("Not Found")) {
+                // 서버에 없으면 새로 생성으로 대체
+                await apiPost(`/api/classes/${encodeURIComponent(c.id)}/assignments`, {
+                  title,
+                  description: desc,
+                  dueAt: dueIso,
+                });
+              } else {
+                throw e;
+              }
+            }
+          } else {
+            await apiPost(`/api/classes/${encodeURIComponent(c.id)}/assignments`, {
+              title,
+              description: desc,
+              dueAt: dueIso,
+            });
+          }
           const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`).catch(() => []);
           const amap = getAssignments();
           amap[c.id] = refreshed || [];
@@ -1932,30 +2092,54 @@ async function loadClassDetailPage() {
             assignPendingSelect = id;
             const t = document.getElementById("assignTitleInput");
             const d = document.getElementById("assignDescInput");
-            const due = document.getElementById("assignDueInput");
+            const dueDate = document.getElementById("assignDueDate");
+            const dueHour = document.getElementById("assignDueHour");
+            const dueMin = document.getElementById("assignDueMin");
             if (t) t.value = target.title || "";
-            if (d) d.value = target.desc || "";
-            if (due) due.value = target.dueAt || "";
+            if (d) d.value = target.description || target.desc || "";
+            if (target.dueAt && dueDate && dueHour && dueMin) {
+              const dt = new Date(target.dueAt);
+              dueDate.value = dt.toISOString().slice(0,10);
+              dueHour.value = dt.getHours();
+              const m = dt.getMinutes();
+              dueMin.value = [0,10,20,30,40,50].includes(m) ? m : 0;
+            } else {
+              if (dueDate) dueDate.value = "";
+              if (dueHour) dueHour.value = "23";
+              if (dueMin) dueMin.value = "50";
+            }
             if (selectEl) selectEl.value = id;
             const submitBtn2 = document.getElementById("assignSubmitBtn");
             if (submitBtn2) submitBtn2.disabled = false;
           });
         });
         $$("[data-assign-delete]").forEach(btn => {
-          btn.addEventListener("click", () => {
+          btn.addEventListener("click", async () => {
             const id = btn.getAttribute("data-assign-delete");
             if (!confirm("해당 과제를 삭제할까요?")) return;
-            const metaAll3 = getAssignMeta();
-            const listArr = (Array.isArray(metaAll3[c.id]) ? metaAll3[c.id] : []).filter(m => m.id !== id);
-            metaAll3[c.id] = listArr;
-            setAssignMeta(metaAll3);
-            const assignsAll = getAssignments();
-            assignsAll[c.id] = (assignsAll[c.id] || []).filter(a => a.assignId !== id);
-            setAssignments(assignsAll);
-            if (selectEl && listArr.length) {
-              selectEl.value = listArr[listArr.length - 1].id;
+            try {
+              await apiRequest(`/api/assignments/${encodeURIComponent(id)}`, "DELETE");
+              const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`).catch(() => []);
+              const amap = getAssignments();
+              amap[c.id] = refreshed || [];
+              setAssignments(amap);
+              if (selectEl && refreshed?.length) {
+                selectEl.value = refreshed[refreshed.length - 1].id;
+              }
+              renderAssignments();
+            } catch (e) {
+              console.error(e);
+              if ((e?.message || "").includes("Not Found")) {
+                // 서버에 없으면 로컬 목록을 새로고침해 정리
+                const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`).catch(() => []);
+                const amap = getAssignments();
+                amap[c.id] = refreshed || [];
+                setAssignments(amap);
+                renderAssignments();
+              } else {
+                alert("과제 삭제 실패\n" + (e?.message || ""));
+              }
             }
-            renderAssignments();
           });
         });
       }
@@ -2125,14 +2309,14 @@ async function loadClassDetailPage() {
     const title = ($("#matTitle")?.value || "").trim();
     const file = $("#matFile")?.files?.[0] || null;
     if (!title || !file) { alert("제목과 파일을 입력하세요."); return; }
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const fileDataUrl = String(reader.result || "");
+    (async () => {
       try {
+        const { signedUrl, path } = await uploadToSupabaseStorage(file, `materials/${c.id}`);
         await apiPost(`/api/classes/${encodeURIComponent(c.id)}/materials`, {
           title,
-          fileUrl: fileDataUrl,
+          fileUrl: signedUrl || path,
           mime: file.type || null,
+          filePath: path,
         });
         const mats = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/materials`).catch(() => []);
         const mm = getMaterials();
@@ -2144,8 +2328,9 @@ async function loadClassDetailPage() {
           try {
             await apiPost(`/api/classes/${encodeURIComponent(c.id)}/replays`, {
               title: `${title} (업로드 영상)`,
-              vodUrl: fileDataUrl,
+              vodUrl: signedUrl || path,
               mime: file.type || null,
+              filePath: path,
             });
             const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/replays`).catch(() => []);
             const rp = getReplays();
@@ -2160,10 +2345,9 @@ async function loadClassDetailPage() {
         $("#matFile").value = "";
       } catch (e) {
         console.error(e);
-        alert("자료 업로드 실패");
+        alert("자료 업로드 실패\n" + (e?.message || ""));
       }
-    };
-    reader.readAsDataURL(file);
+    })();
   });
 
   // 과제 제출 (학생만)
@@ -2318,7 +2502,7 @@ async function renderReplaysList(classId) {
   async function fetchReplayVod(replayId) {
     const rp = getReplays();
     const cached = (rp[classId] || []).find((x) => x.id === replayId);
-    if (cached?.vodUrl) return cached.vodUrl;
+    if (cached?.vodUrl) return resolveStorageUrl(cached.vodUrl);
 
     const full = await apiGet(`/api/replays/${encodeURIComponent(replayId)}`);
     const updated = (rp[classId] || []).map((x) => (
@@ -2326,7 +2510,7 @@ async function renderReplaysList(classId) {
     ));
     rp[classId] = updated;
     setReplays(rp);
-    return full?.vodUrl || "";
+    return full?.vodUrl ? resolveStorageUrl(full?.vodUrl) : "";
   }
 
   function renderList() {
@@ -2414,18 +2598,19 @@ async function renderReplaysList(classId) {
         alert("VOD URL이나 영상 파일을 입력하세요.");
         return;
       }
-      let vodPayload = url;
-      if (!vodPayload && file) {
-        try {
-          vodPayload = await blobToDataUrl(file);
-        } catch (err) {
-          console.error(err);
-          alert("영상 파일을 읽지 못했습니다.");
-          return;
-        }
-      }
       try {
-        const created = await apiPost(`/api/classes/${encodeURIComponent(classId)}/replays`, { title, vodUrl: vodPayload, mime: file?.type || null });
+        let vodPayload = url;
+        let path = null;
+        if (!vodPayload && file) {
+          if (file.size > 50 * 1024 * 1024) {
+            alert("Supabase 무료 요금제는 파일당 50MB까지만 업로드 가능합니다.");
+            return;
+          }
+          const uploaded = await uploadToSupabaseStorage(file, `replays/${classId}`);
+          vodPayload = uploaded.signedUrl || uploaded.path;
+          path = uploaded.path;
+        }
+        const created = await apiPost(`/api/classes/${encodeURIComponent(classId)}/replays`, { title, vodUrl: vodPayload, mime: file?.type || null, filePath: path });
         const rp = getReplays();
         const meta = { ...created, hasVod: created?.hasVod ?? !!created?.vodUrl, vodUrl: undefined };
         rp[classId] = [meta, ...(rp[classId] || [])];
@@ -2819,6 +3004,10 @@ async function loadLivePage() {
   const remotePrev = $("#remotePrev");
   const remoteNext = $("#remoteNext");
   const remotePageInfo = $("#remotePageInfo");
+  const remoteViewGrid = $("#remoteViewGrid");
+  const remoteViewSpeaker = $("#remoteViewSpeaker");
+  const remotePinnedInfo = $("#remotePinnedInfo");
+  const btnQuality = $("#btnQuality");
 
   let connected = false;
   let room = null;
@@ -2828,6 +3017,9 @@ async function loadLivePage() {
   const remoteList = []; // [{sid, el}]
   let remotePage = 0;
   const REMOTE_PER_PAGE = 16; // 4x4
+  let remoteViewMode = "grid"; // grid | speaker
+  let pinnedSid = null;
+  let qualityMode = "high"; // high | balanced
   renderRemotePage();
 
   function setOverlay(text) {
@@ -2855,9 +3047,21 @@ async function loadLivePage() {
     if (remotePage >= totalPage) remotePage = Math.max(0, totalPage - 1);
 
     remoteWrap.innerHTML = "";
-    const start = remotePage * REMOTE_PER_PAGE;
-    const slice = remoteList.slice(start, start + REMOTE_PER_PAGE);
-    slice.forEach(item => remoteWrap.appendChild(item.el));
+    if (remoteViewMode === "speaker") {
+      const target = remoteList.find(r => r.sid === pinnedSid) || remoteList[0];
+      if (target) {
+        remoteWrap.appendChild(target.el);
+        pinnedSid = target.sid;
+        if (remotePinnedInfo) remotePinnedInfo.textContent = `고정: ${target.el.dataset.name || target.sid}`;
+      } else {
+        if (remotePinnedInfo) remotePinnedInfo.textContent = "고정된 참여자 없음";
+      }
+    } else {
+      const start = remotePage * REMOTE_PER_PAGE;
+      const slice = remoteList.slice(start, start + REMOTE_PER_PAGE);
+      slice.forEach(item => remoteWrap.appendChild(item.el));
+      if (remotePinnedInfo) remotePinnedInfo.textContent = "";
+    }
 
     if (remotePageInfo) {
       remotePageInfo.textContent = `${total ? remotePage + 1 : 0}/${totalPage} · 참여자 ${total}명`;
@@ -2874,14 +3078,41 @@ async function loadLivePage() {
 
     const box = document.createElement("div");
     box.className = "remoteItem";
+    box.dataset.sid = sid;
 
     const label = document.createElement("div");
     label.className = "remoteLabel";
-    label.textContent = participant?.name || participant?.identity || "참여자";
+    const displayName = participant?.name || participant?.identity || "참여자";
+    box.dataset.name = displayName;
+    label.textContent = displayName;
     box.appendChild(label);
 
-    // 선생님/관리자만 보이는 강퇴 버튼
+    // 선생님/관리자만 보이는 강퇴 버튼 + 시간 선택
     if (isOwnerTeacher) {
+      const ctrlRow = document.createElement("div");
+      ctrlRow.style.display = "flex";
+      ctrlRow.style.gap = "6px";
+      ctrlRow.style.alignItems = "center";
+      ctrlRow.style.flexWrap = "wrap";
+
+      const sel = document.createElement("select");
+      sel.className = "input";
+      sel.style.padding = "4px";
+      sel.style.fontSize = "12px";
+      [
+        { label: "5분", value: 5 },
+        { label: "10분", value: 10 },
+        { label: "30분", value: 30 },
+        { label: "1시간", value: 60 },
+        { label: "3시간", value: 180 },
+        { label: "1일", value: 1440 },
+      ].forEach(opt => {
+        const o = document.createElement("option");
+        o.value = opt.value;
+        o.textContent = opt.label;
+        sel.appendChild(o);
+      });
+
       const kickBtn = document.createElement("button");
       kickBtn.className = "btn danger";
       kickBtn.style.padding = "6px 10px";
@@ -2891,14 +3122,31 @@ async function loadLivePage() {
         const targetName = participant?.name || participant?.identity || "참여자";
         if (!confirm(`${targetName} 을(를) 강퇴할까요?`)) return;
         try {
-          await apiPost("/api/live/kick", { classId, userId: participant?.identity });
+          const mins = Number(sel.value) || 5;
+          await apiPost("/api/live/kick", { classId, userId: participant?.identity, banMinutes: mins });
           removeRemote(sid);
         } catch (e) {
           console.error(e);
           alert("강퇴 실패\n" + (e?.message || ""));
         }
       });
-      box.appendChild(kickBtn);
+
+      ctrlRow.appendChild(sel);
+      ctrlRow.appendChild(kickBtn);
+      box.appendChild(ctrlRow);
+    } else {
+      // 스피커뷰에서 고정할 때 사용
+      const pinBtn = document.createElement("button");
+      pinBtn.className = "btn";
+      pinBtn.style.padding = "6px 10px";
+      pinBtn.style.fontSize = "12px";
+      pinBtn.textContent = "보기";
+      pinBtn.addEventListener("click", () => {
+        pinnedSid = sid;
+        remoteViewMode = "speaker";
+        renderRemotePage();
+      });
+      box.appendChild(pinBtn);
     }
 
     const vid = document.createElement("video");
@@ -2972,6 +3220,28 @@ async function loadLivePage() {
     remotePage += 1;
     renderRemotePage();
   });
+  remoteViewGrid?.addEventListener("click", () => {
+    remoteViewMode = "grid";
+    renderRemotePage();
+  });
+  remoteViewSpeaker?.addEventListener("click", () => {
+    remoteViewMode = "speaker";
+    renderRemotePage();
+  });
+  const updateQualityBtn = () => {
+    if (!btnQuality) return;
+    btnQuality.textContent = qualityMode === "high" ? "고화질 유지" : "끊김 줄이기";
+    btnQuality.classList.toggle("primary", qualityMode === "high");
+  };
+  updateQualityBtn();
+
+  btnQuality?.addEventListener("click", () => {
+    qualityMode = qualityMode === "high" ? "balanced" : "high";
+    updateQualityBtn();
+    if (connected) {
+      showToast("변경하려면 연결을 끊고 다시 연결하세요.", "info");
+    }
+  });
 
   btnConnect?.addEventListener("click", async () => {
     if (connected) {
@@ -2985,7 +3255,11 @@ async function loadLivePage() {
       const { url, token } = tk || {};
       if (!url || !token) throw new Error("LiveKit 토큰을 받을 수 없습니다.");
 
-      room = new LK.Room();
+      const roomOpts = qualityMode === "balanced"
+        ? { adaptiveStream: true, dynacast: true }
+        : { adaptiveStream: false, dynacast: false };
+
+      room = new LK.Room(roomOpts);
       await room.connect(url, token, { autoSubscribe: true });
 
       // 로컬 트랙 발행

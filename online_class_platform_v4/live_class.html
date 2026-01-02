@@ -40,6 +40,11 @@
               <video id="liveVideo" class="liveVideo" autoplay playsinline muted></video>
               <div class="videoOverlay" id="videoOverlay">카메라/마이크를 연결하면 라이브가 시작됩니다.</div>
             </div>
+            <div style="display:flex; gap:6px; align-items:center; margin:8px 0 4px 0; flex-wrap:wrap;">
+              <button class="btn" id="remoteViewGrid">그리드 뷰</button>
+              <button class="btn" id="remoteViewSpeaker">스피커 뷰</button>
+              <div class="muted" id="remotePinnedInfo" style="font-size:12px;"></div>
+            </div>
             <div id="remoteVideos" class="remoteGrid"></div>
             <div class="remotePager">
               <button class="btn" id="remotePrev">이전</button>
@@ -52,6 +57,7 @@
               <button class="btn" id="btnShare">화면 공유</button>
               <button class="btn" id="btnRecord">녹화 시작</button>
               <button class="btn" id="btnLeave">나가기</button>
+              <button class="btn" id="btnQuality">고화질 유지</button>
 
               <div class="controlMini">
                 <label>화면 비율</label>
