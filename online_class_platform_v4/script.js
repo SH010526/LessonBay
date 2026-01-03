@@ -1629,6 +1629,7 @@ async function loadClassDetailPage() {
   if (!root) return;
 
   ensureReplayModalBinding();
+  let assignExistingFile = null; // 학생 과제 편집 시 기존 첨부 유지/삭제용
 
   const id = resolveClassIdFromUrl();
   if (!id) {
@@ -2070,6 +2071,32 @@ async function loadClassDetailPage() {
     const formWrap = document.getElementById("assignFormWrap");
     const textEl = document.getElementById("assignText");
     const fileEl = document.getElementById("assignFile");
+    let filePreview = document.getElementById("assignFilePreview");
+    if (!filePreview && fileEl?.parentElement) {
+      filePreview = document.createElement("div");
+      filePreview.id = "assignFilePreview";
+      filePreview.className = "muted";
+      filePreview.style.marginTop = "6px";
+      fileEl.parentElement.appendChild(filePreview);
+    }
+    const renderFilePreview = (label, onRemove) => {
+      if (!filePreview) return;
+      if (!label) {
+        filePreview.innerHTML = `<span style="color:rgba(15,23,42,.55); font-size:12px;">첨부 없음</span>`;
+        return;
+      }
+      filePreview.innerHTML = `
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span style="font-size:13px;">${escapeHtml(label)}</span>
+          <button class="btn" type="button" id="assignFileRemoveBtn" style="padding:4px 10px;">첨부 제거</button>
+        </div>
+      `;
+      const btn = document.getElementById("assignFileRemoveBtn");
+      btn?.addEventListener("click", () => {
+        onRemove?.();
+        renderFilePreview("");
+      });
+    };
     const submitBtn = submitBtnMain;
     const toggleStudentFields = (show) => {
       if (textEl) textEl.style.display = show ? "block" : "none";
@@ -2351,6 +2378,16 @@ async function loadClassDetailPage() {
       if (sel && myAssign.assignId) sel.value = myAssign.assignId;
       const txt = document.getElementById("assignText");
       if (txt) txt.value = myAssign.text || "";
+      assignExistingFile = (myAssign.fileName && (myAssign.fileData || myAssign.fileUrl)) ? {
+        name: myAssign.fileName,
+        data: myAssign.fileData || myAssign.fileUrl || ""
+      } : null;
+      if (fileEl) fileEl.value = "";
+      if (assignExistingFile) {
+        renderFilePreview(`${assignExistingFile.name} (기존 첨부)`, () => { assignExistingFile = null; });
+      } else {
+        renderFilePreview("");
+      }
       const status = document.getElementById("assignStatus");
       if (status) status.textContent = "수정 후 다시 제출 버튼을 눌러주세요.";
       if (formWrap) formWrap.dataset.editing = "1";
@@ -2358,21 +2395,26 @@ async function loadClassDetailPage() {
       if (formWrap) formWrap.style.display = "block";
         });
         // 제출한 상태에서는 기본적으로 입력 필드 숨김 (수정 버튼을 눌렀을 때만 다시 보임)
-        const showForm = formWrap?.dataset.editing === "1";
-        if (formWrap) {
-          formWrap.dataset.editing = showForm ? "1" : "0";
-          formWrap.style.display = showForm ? "block" : "none";
-        }
-        toggleStudentFields(showForm);
-      } else {
-        list.innerHTML = `<div class="muted" style="font-size:13px;">제출한 과제가 없습니다. 제출 후에는 선생님만 전체 목록을 볼 수 있습니다.</div>`;
-        toggleStudentFields(true);
-        if (formWrap) {
-          formWrap.dataset.editing = "1";
-          formWrap.style.display = "block";
-        }
+      const showForm = formWrap?.dataset.editing === "1";
+      if (formWrap) {
+        formWrap.dataset.editing = showForm ? "1" : "0";
+        formWrap.style.display = showForm ? "block" : "none";
       }
-      return;
+      toggleStudentFields(showForm);
+      if (!showForm) renderFilePreview("");
+      if (showForm && assignExistingFile) {
+        renderFilePreview(`${assignExistingFile.name} (기존 첨부)`, () => { assignExistingFile = null; });
+      }
+    } else {
+      list.innerHTML = `<div class="muted" style="font-size:13px;">제출한 과제가 없습니다. 제출 후에는 선생님만 전체 목록을 볼 수 있습니다.</div>`;
+      toggleStudentFields(true);
+      if (formWrap) {
+        formWrap.dataset.editing = "1";
+        formWrap.style.display = "block";
+      }
+      renderFilePreview("");
+    }
+    return;
     }
 
     list.innerHTML = assignList.length
@@ -2544,7 +2586,7 @@ async function loadClassDetailPage() {
     }
     const text = ($("#assignText")?.value || "").trim();
     const file = $("#assignFile")?.files?.[0] || null;
-    if (!text && !file) { alert("제출 내용 또는 파일을 입력하세요."); return; }
+    if (!text && !file && !assignExistingFile) { alert("제출 내용 또는 파일을 입력하세요."); return; }
 
     const saveAssignment = async (fileData) => {
       try {
@@ -2559,6 +2601,7 @@ async function loadClassDetailPage() {
         renderAssignments();
         $("#assignText").value = "";
         $("#assignFile").value = "";
+        assignExistingFile = null;
         alert("과제 제출 완료!");
       } catch (e) {
         console.error(e);
@@ -2570,6 +2613,8 @@ async function loadClassDetailPage() {
       const reader = new FileReader();
       reader.onload = () => saveAssignment(String(reader.result || ""));
       reader.readAsDataURL(file);
+    } else if (assignExistingFile?.data) {
+      await saveAssignment(assignExistingFile.data);
     } else {
       saveAssignment("");
     }
