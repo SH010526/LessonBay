@@ -1953,7 +1953,13 @@ async function loadClassDetailPage() {
             </div>
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <a class="btn primary" data-storage-path="${escapeAttr(m.filePath || "")}" href="${escapeAttr(m.fileUrl || m.url || "#")}" download>다운로드</a>
+            <a
+              class="btn primary"
+              data-storage-path="${escapeAttr(m.filePath || "")}"
+              data-file-name="${escapeAttr(m.fileName || m.title || "자료")}"
+              href="${escapeAttr(m.fileUrl || m.url || "#")}"
+              download
+            >다운로드</a>
           </div>
         </div>
       `).join("")
@@ -1966,7 +1972,17 @@ async function loadClassDetailPage() {
         e.preventDefault();
         try {
           const signed = await resolveStorageUrl(p);
-          window.open(signed, "_blank");
+          const fname = a.getAttribute("data-file-name") || "download";
+          const url = signed.includes("?") ? `${signed}&download=${encodeURIComponent(fname)}` : `${signed}?download=${encodeURIComponent(fname)}`;
+
+          const tmp = document.createElement("a");
+          tmp.href = url;
+          tmp.download = fname;
+          tmp.style.display = "none";
+          document.body.appendChild(tmp);
+          tmp.click();
+          document.body.removeChild(tmp);
+          showToast("자료 다운로드를 시작했습니다.", "success");
         } catch (_) {
           alert("파일을 가져오지 못했습니다. 잠시 후 다시 시도하세요.");
         }
