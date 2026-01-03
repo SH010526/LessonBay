@@ -2437,22 +2437,30 @@ async function loadClassDetailPage() {
     if (!isOwnerTeacher) {
       // 학생 화면: 선택된 과제 기준으로 본인 제출만 보여주기
       if (myAssign) {
-        list.innerHTML = `
-          <div class="muted" style="margin-bottom:6px;">제출한 과제는 선생님만 확인할 수 있습니다.</div>
-          <div class="session-item" style="border-left:3px solid rgba(109,94,252,.35);">
-            <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;">
-              <div class="session-title">${escapeHtml(assignMap[myAssign.assignId || selectedAssignId || ""]?.title || "제출함")}</div>
-              <span class="chip" style="background:rgba(109,94,252,.14);">내 제출</span>
-            </div>
-            <div class="session-sub">제출: ${new Date(myAssign.submittedAt || myAssign.at).toLocaleString("ko-KR")}${myAssign.updatedAt ? ` / 수정: ${new Date(myAssign.updatedAt).toLocaleString("ko-KR")}` : ""}</div>
-            <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(myAssign.text || "")}</div>
-            ${myAssign.url ? `<div class="session-sub"><a href="${escapeAttr(myAssign.url)}" target="_blank">링크 열기</a></div>` : ``}
-            ${myAssign.fileName && myAssign.fileData ? `<div class="session-sub"><a href="${escapeAttr(myAssign.fileData)}" download="${escapeAttr(myAssign.fileName)}">첨부파일 다운로드 (${escapeHtml(myAssign.fileName)})</a></div>` : ``}
-            <div style="margin-top:8px;">
-              <button class="btn" id="assignEditMine">수정</button>
-            </div>
+      list.innerHTML = `
+        <div class="muted" style="margin-bottom:6px;">제출한 과제는 선생님만 확인할 수 있습니다.</div>
+        <div class="session-item" style="border-left:3px solid rgba(109,94,252,.35);">
+          <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+            <div class="session-title">${escapeHtml(assignMap[myAssign.assignId || selectedAssignId || ""]?.title || "제출함")}</div>
+            <span class="chip" style="background:rgba(109,94,252,.14);">내 제출</span>
           </div>
-        `;
+          <div class="session-sub">제출: ${new Date(myAssign.submittedAt || myAssign.at).toLocaleString("ko-KR")}${myAssign.updatedAt ? ` / 수정: ${new Date(myAssign.updatedAt).toLocaleString("ko-KR")}` : ""}</div>
+          <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(myAssign.text || "")}</div>
+          ${myAssign.url ? `<div class="session-sub"><a href="${escapeAttr(myAssign.url)}" target="_blank">링크 열기</a></div>` : ``}
+          ${(() => {
+            const fUrl = myAssign.fileData || myAssign.fileUrl || "";
+            const fName = myAssign.fileName || inferFileName(fUrl);
+            if (!fUrl) return ``;
+            return `<div class="session-sub" style="display:flex; gap:8px; align-items:center;">
+              <span class="chip secondary" style="padding:4px 8px;">첨부</span>
+              <a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>
+            </div>`;
+          })()}
+          <div style="margin-top:8px;">
+            <button class="btn" id="assignEditMine">수정</button>
+          </div>
+        </div>
+      `;
         // 내 제출 수정: 폼에 값 채워서 다시 제출할 수 있게
         $("#assignEditMine")?.addEventListener("click", () => {
           const sel = document.getElementById("assignSelect");
@@ -2508,7 +2516,7 @@ async function loadClassDetailPage() {
             <div class="session-title">${escapeHtml(a.title)}</div>
             <div class="session-sub">제출 마감: ${a.dueAt ? new Date(a.dueAt).toLocaleString("ko-KR") : "마감 없음"}</div>
             <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(a.description || "")}</div>
-            <div class="session-sub">제출: ${subCount}건</div>
+              <div class="session-sub">제출: ${subCount}건</div>
             ${subCount ? `
               <div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">
                 ${a.submissions.map(s => {
@@ -2517,7 +2525,10 @@ async function loadClassDetailPage() {
                   const txt = escapeHtml(s.content || s.text || "");
                   const fUrl = s.fileUrl || s.fileData || "";
                   const fName = s.fileName || inferFileName(fUrl);
-                  const fileRow = fUrl ? `<div class="session-sub"><a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank">첨부 다운로드 (${escapeHtml(fName)})</a></div>` : "";
+                  const fileRow = fUrl ? `<div class="session-sub" style="display:flex; gap:8px; align-items:center;">
+                      <span class="chip secondary" style="padding:4px 8px;">첨부</span>
+                      <a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>
+                    </div>` : "";
                   const scoreVal = (s.score ?? "") === "" || s.score === null ? "" : s.score;
                   const feedbackVal = s.feedback || "";
                   return `
