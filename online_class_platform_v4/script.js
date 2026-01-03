@@ -152,8 +152,9 @@ function hideLoading() {
   if (el && loadingCount === 0) el.style.display = "none";
 }
 
-async function apiGet(path) {
-  showLoading();
+async function apiGet(path, opts = {}) {
+  const silent = !!opts.silent;
+  if (!silent) showLoading();
   try {
     const res = await fetch(`${API_BASE_URL}${path}`, {
       headers: await apiHeaders(),
@@ -165,7 +166,7 @@ async function apiGet(path) {
     }
     return res.json();
   } finally {
-    hideLoading();
+    if (!silent) hideLoading();
   }
 }
 
@@ -326,9 +327,7 @@ async function syncLocalUserFromSupabaseSession() {
   if (!supabaseClient) return;
 
   try {
-    // 최신 메타데이터 반영을 위해 세션 새로고침
-    const { data: refData } = await supabaseClient.auth.refreshSession();
-    const sessionData = refData?.session ? refData : (await supabaseClient.auth.getSession()).data;
+    const { data: sessionData } = await supabaseClient.auth.getSession();
     const session = sessionData?.session || null;
 
     if (!session || !session.user) {
@@ -876,36 +875,38 @@ async function ensureSeedData() {
   const user = getUser();
 
   // 수업 목록 로드 (API → 비어 있으면 로컬 예제)
-  try {
-    const classes = await apiGet("/api/classes");
-    const normalized = (classes || []).map(c => ({
-      ...c,
-      teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
-      teacherId: c.teacherId || c.teacher?.id || "",
-      thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
-    }));
-    if (normalized.length === 0) {
-      setClasses(await loadLocalSampleClasses());
-    } else {
-      setClasses(normalized);
-    }
-  } catch (e) {
-    console.error("classes fetch failed", e);
-    setClasses(await loadLocalSampleClasses());
-  }
-
-  // 내 수강 정보 로드
-  if (user) {
+  const classesPromise = (async () => {
     try {
-      const enrollList = await apiGet("/api/me/enrollments");
+      const classes = await apiGet("/api/classes", { silent: true });
+      const normalized = (classes || []).map(c => ({
+        ...c,
+        teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
+        teacherId: c.teacherId || c.teacher?.id || "",
+        thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+      }));
+      if (normalized.length === 0) {
+        setClasses(await loadLocalSampleClasses());
+      } else {
+        setClasses(normalized);
+      }
+    } catch (e) {
+      console.error("classes fetch failed", e);
+      setClasses(await loadLocalSampleClasses());
+    }
+  })();
+
+  const enrollPromise = (async () => {
+    if (!user) { setEnrollments({}); return; }
+    try {
+      const enrollList = await apiGet("/api/me/enrollments", { silent: true });
       setEnrollments(enrollList || []);
     } catch (e) {
       console.error("enrollments fetch failed", e);
       setEnrollments({});
     }
-  } else {
-    setEnrollments({});
-  }
+  })();
+
+  await Promise.all([classesPromise, enrollPromise]);
 
   // 세션 동기화 후 내비게이션 갱신
   updateNav();
