@@ -270,6 +270,28 @@ async function resolveStorageDownloadUrl(path, filename) {
   return data?.signedUrl || path;
 }
 
+async function forceDownload(url, filename = "download") {
+  try {
+    const res = await fetch(url, { mode: "cors" });
+    if (!res.ok) throw new Error(`download failed: ${res.status}`);
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+    showToast("다운로드를 시작했습니다.", "success");
+  } catch (err) {
+    console.error("forceDownload failed", err);
+    // 마지막 수단: 새 탭에서 열어주기
+    window.open(url, "_blank");
+  }
+}
+
 /* ============================
    ? Supabase session -> local user sync
    ============================ */
@@ -1982,15 +2004,7 @@ async function loadClassDetailPage() {
         try {
           const fname = a.getAttribute("data-file-name") || "download";
           const url = await resolveStorageDownloadUrl(p, fname);
-
-          const tmp = document.createElement("a");
-          tmp.href = url;
-          tmp.download = fname;
-          tmp.style.display = "none";
-          document.body.appendChild(tmp);
-          tmp.click();
-          document.body.removeChild(tmp);
-          showToast("자료 다운로드를 시작했습니다.", "success");
+          await forceDownload(url, fname);
         } catch (_) {
           alert("파일을 가져오지 못했습니다. 잠시 후 다시 시도하세요.");
         }
