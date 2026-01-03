@@ -262,12 +262,28 @@ async function resolveStorageUrl(urlOrPath) {
 }
 async function resolveStorageDownloadUrl(path, filename) {
   ensureSupabaseClient();
+  if (!path) return path;
+
+  const addDownloadParam = (url, fname) => {
+    try {
+      const u = new URL(url);
+      if (!u.searchParams.has("download") && fname) u.searchParams.set("download", fname);
+      return u.toString();
+    } catch (_) {
+      return url;
+    }
+  };
+
+  // 이미 서명된 전체 URL인 경우에도 download 파라미터를 보장
+  if (/^https?:\/\//i.test(path) || path.startsWith("data:")) {
+    return addDownloadParam(path, filename || "download");
+  }
+
   if (!supabaseClient) return path;
-  if (!path || /^https?:\/\//i.test(path) || path.startsWith("data:")) return path;
   const opts = filename ? { download: filename } : undefined;
   const { data, error } = await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(path, 60 * 60 * 24, opts);
   if (error) return path;
-  return data?.signedUrl || path;
+  return addDownloadParam(data?.signedUrl || path, filename || "download");
 }
 
 async function forceDownload(url, filename = "download") {
@@ -1984,28 +2000,28 @@ async function loadClassDetailPage() {
             </div>
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <a
+            <button
               class="btn primary"
+              type="button"
               data-storage-path="${escapeAttr(m.filePath || "")}"
               data-file-name="${escapeAttr(m.fileName || m.title || "자료")}"
-              href="${escapeAttr(m.fileUrl || m.url || "#")}"
-              download
-            >다운로드</a>
+              data-file-url="${escapeAttr(m.fileUrl || m.url || "")}"
+            >다운로드</button>
           </div>
         </div>
       `).join("")
       : `<div class="muted" style="font-size:13px;">아직 등록된 자료가 없습니다.</div>`;
 
-    list.querySelectorAll("[data-storage-path]").forEach((a) => {
-      const p = a.getAttribute("data-storage-path");
-      if (!p) return;
-      a.addEventListener("click", async (e) => {
-        e.preventDefault();
+    list.querySelectorAll("[data-storage-path]").forEach((btn) => {
+      const p = btn.getAttribute("data-storage-path");
+      const directUrl = btn.getAttribute("data-file-url") || "";
+      btn.addEventListener("click", async () => {
+        const fname = btn.getAttribute("data-file-name") || "download";
         try {
-          const fname = a.getAttribute("data-file-name") || "download";
-          const url = await resolveStorageDownloadUrl(p, fname);
+          const url = await resolveStorageDownloadUrl(p || directUrl, fname);
           await forceDownload(url, fname);
-        } catch (_) {
+        } catch (err) {
+          console.error(err);
           alert("파일을 가져오지 못했습니다. 잠시 후 다시 시도하세요.");
         }
       });
