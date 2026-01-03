@@ -1703,32 +1703,40 @@ async function loadClassDetailPage() {
     return;
   }
 
-  // 원격 데이터 불러오기
-  try {
-    const [mats, assigns, revs, qnas] = await Promise.all([
-      apiGet(`/api/classes/${encodeURIComponent(id)}/materials`).catch(() => []),
-      apiGet(`/api/classes/${encodeURIComponent(id)}/assignments`).catch(() => []),
-      apiGet(`/api/classes/${encodeURIComponent(id)}/reviews`).catch(() => []),
-      apiGet(`/api/classes/${encodeURIComponent(id)}/qna`).catch(() => []),
-    ]);
-    const matsMap = getMaterials();
-    matsMap[id] = mats || [];
-    setMaterials(matsMap);
+  // 원격 데이터는 백그라운드로 불러와서 UI를 즉시 렌더
+  (async () => {
+    try {
+      const [mats, assigns, revs, qnas] = await Promise.all([
+        apiGet(`/api/classes/${encodeURIComponent(id)}/materials`, { silent: true }).catch(() => []),
+        apiGet(`/api/classes/${encodeURIComponent(id)}/assignments`, { silent: true }).catch(() => []),
+        apiGet(`/api/classes/${encodeURIComponent(id)}/reviews`, { silent: true }).catch(() => []),
+        apiGet(`/api/classes/${encodeURIComponent(id)}/qna`, { silent: true }).catch(() => []),
+      ]);
+      const matsMap = getMaterials();
+      matsMap[id] = mats || [];
+      setMaterials(matsMap);
 
-    const assignMap = getAssignments();
-    assignMap[id] = assigns || [];
-    setAssignments(assignMap);
+      const assignMap = getAssignments();
+      assignMap[id] = assigns || [];
+      setAssignments(assignMap);
 
-    const revMap = getReviews();
-    revMap[id] = revs || [];
-    setReviews(revMap);
+      const revMap = getReviews();
+      revMap[id] = revs || [];
+      setReviews(revMap);
 
-    const qMap = getQna();
-    qMap[id] = qnas || [];
-    setQna(qMap);
-  } catch (e) {
-    console.error("class detail data fetch failed", e);
-  }
+      const qMap = getQna();
+      qMap[id] = qnas || [];
+      setQna(qMap);
+
+      // 데이터 도착 시 섹션만 부분 갱신
+      renderAssignments();
+      renderReviews();
+      renderMaterials();
+      renderQna();
+    } catch (e) {
+      console.error("class detail data fetch failed", e);
+    }
+  })();
 
   $("#detailImg").src = c.thumb || FALLBACK_THUMB;
   $("#detailTitle").textContent = c.title || "-";
@@ -3818,20 +3826,21 @@ function init() {
   updateNav();
   runReveal();
 
-  ensureSeedData().then(() => {
-    if ($("#homePopular")) loadHomePopular();
-    if ($("#classGrid")) loadClassesPage();
-    if ($("#detailRoot")) loadClassDetailPage();
-    if ($("#createClassForm")) handleCreateClassPage();
-    if ($("#loginForm")) handleLoginPage();
-    if ($("#signupForm")) handleSignupPage();
-    if ($("#settingsRoot")) handleSettingsPage();
-    if ($("#teacherDash")) loadTeacherDashboard();
-    if ($("#studentDash")) loadStudentDashboard();
-    if ($("#liveRoot")) loadLivePage();
+  // 화면 즉시 렌더, 데이터는 백그라운드
+  if ($("#homePopular")) loadHomePopular();
+  if ($("#classGrid")) loadClassesPage();
+  if ($("#detailRoot")) loadClassDetailPage();
+  if ($("#createClassForm")) handleCreateClassPage();
+  if ($("#loginForm")) handleLoginPage();
+  if ($("#signupForm")) handleSignupPage();
+  if ($("#settingsRoot")) handleSettingsPage();
+  if ($("#teacherDash")) loadTeacherDashboard();
+  if ($("#studentDash")) loadStudentDashboard();
+  if ($("#liveRoot")) loadLivePage();
 
-    if (getPath() === "logout.html") doLogout(true);
-  });
+  ensureSeedData();
+
+  if (getPath() === "logout.html") doLogout(true);
 }
 
 document.addEventListener("DOMContentLoaded", init);
