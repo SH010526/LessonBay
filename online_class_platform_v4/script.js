@@ -133,7 +133,7 @@ function showLoading() {
         el.style.fontSize = "16px";
         el.style.color = "#fff";
         el.style.backdropFilter = "none";
-        el.style.pointerEvents = "none"; // 화면 상호작용 차단 안 함
+        el.style.pointerEvents = "none"; // 화면 상호작용 차단 안 함.
         el.innerHTML = `<div style="padding:12px 14px; background:rgba(15,23,42,0.85); border-radius:10px; box-shadow:0 8px 20px rgba(0,0,0,0.16);">잠시만요... 처리 중이에요</div>`;
         el.style.display = "none";
         document.body.appendChild(el);
