@@ -2178,6 +2178,12 @@ async function loadClassDetailPage() {
       if (fileEl) fileEl.style.display = show ? "block" : "none";
       if (submitBtn) submitBtn.style.display = show ? "block" : "none";
     };
+
+    // 선생님은 제출 폼을 숨김
+    if (isOwnerTeacher) {
+      if (formWrap) formWrap.style.display = "none";
+    }
+
     // 학생 편집 상태 플래그 (dataset.editing = "1" 이면 편집/제출 가능)
     let isEditingStudent = formWrap?.dataset.editing === "1";
 
