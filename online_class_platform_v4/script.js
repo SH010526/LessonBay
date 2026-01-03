@@ -260,6 +260,15 @@ async function resolveStorageUrl(urlOrPath) {
   if (error) return urlOrPath;
   return data?.signedUrl || urlOrPath;
 }
+async function resolveStorageDownloadUrl(path, filename) {
+  ensureSupabaseClient();
+  if (!supabaseClient) return path;
+  if (!path || /^https?:\/\//i.test(path) || path.startsWith("data:")) return path;
+  const opts = filename ? { download: filename } : undefined;
+  const { data, error } = await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(path, 60 * 60 * 24, opts);
+  if (error) return path;
+  return data?.signedUrl || path;
+}
 
 /* ============================
    ? Supabase session -> local user sync
@@ -1971,9 +1980,8 @@ async function loadClassDetailPage() {
       a.addEventListener("click", async (e) => {
         e.preventDefault();
         try {
-          const signed = await resolveStorageUrl(p);
           const fname = a.getAttribute("data-file-name") || "download";
-          const url = signed.includes("?") ? `${signed}&download=${encodeURIComponent(fname)}` : `${signed}?download=${encodeURIComponent(fname)}`;
+          const url = await resolveStorageDownloadUrl(p, fname);
 
           const tmp = document.createElement("a");
           tmp.href = url;
