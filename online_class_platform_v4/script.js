@@ -3901,7 +3901,6 @@ function init() {
   // 화면 즉시 렌더, 데이터는 백그라운드
   if ($("#homePopular")) loadHomePopular();
   if ($("#classGrid")) loadClassesPage();
-  if ($("#detailRoot")) loadClassDetailPage();
   if ($("#createClassForm")) handleCreateClassPage();
   if ($("#loginForm")) handleLoginPage();
   if ($("#signupForm")) handleSignupPage();
@@ -3910,7 +3909,10 @@ function init() {
   if ($("#studentDash")) loadStudentDashboard();
   if ($("#liveRoot")) loadLivePage();
 
-  ensureSeedData();
+  ensureSeedData().then(() => {
+    // 사용자/데이터 동기화 이후에만 상세 렌더 (교사/학생 깜빡임 방지)
+    if ($("#detailRoot")) loadClassDetailPage();
+  });
 
   if (getPath() === "logout.html") doLogout(true);
 }
