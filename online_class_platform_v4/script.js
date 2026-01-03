@@ -475,6 +475,35 @@ function getPath() {
   return p || "index.html";
 }
 function getParam(name) { return new URLSearchParams(location.search).get(name); }
+const LAST_CLASS_KEY = "lessonbay:lastClassId";
+function rememberClassId(id) {
+  if (!id) return;
+  try { sessionStorage.setItem(LAST_CLASS_KEY, String(id)); } catch (_) {}
+}
+function readLastClassId() {
+  try { return sessionStorage.getItem(LAST_CLASS_KEY) || ""; } catch (_) { return ""; }
+}
+function resolveClassIdFromUrl() {
+  const fromQuery = getParam("id");
+  if (fromQuery) return fromQuery;
+
+  const path = (typeof location !== "undefined" && location.pathname) ? location.pathname : "";
+  const segments = path.split("/").filter(Boolean);
+  const last = segments.pop() || "";
+  const ignore = new Set(["class_detail", "classes", "class", "live_class", "live", "index"]);
+  if (last && !ignore.has(last.toLowerCase()) && !last.includes(".")) {
+    return decodeURIComponent(last);
+  }
+
+  // 쿼리 유실 시 마지막으로 열었던 수업 ID로 복원
+  return readLastClassId();
+}
+function goClassDetail(id, hash = "") {
+  if (!id) return;
+  rememberClassId(id);
+  const suffix = hash ? (hash.startsWith("#") ? hash : `#${hash}`) : "";
+  location.href = `class_detail.html?id=${encodeURIComponent(id)}${suffix}`;
+}
 function escapeHtml(s) {
   return String(s ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -1358,7 +1387,7 @@ function loadHomePopular() {
   $$(".class-card", wrap).forEach(card => {
     card.addEventListener("click", () => {
       const id = card.getAttribute("data-id");
-      location.href = `class_detail.html?id=${encodeURIComponent(id)}`;
+      goClassDetail(id);
     });
   });
 }
@@ -1399,7 +1428,7 @@ function loadClassesPage() {
     $$(".class-card", grid).forEach(card => {
       card.addEventListener("click", () => {
         const id = card.getAttribute("data-id");
-        location.href = `class_detail.html?id=${encodeURIComponent(id)}`;
+        goClassDetail(id);
       });
     });
   }
@@ -1554,7 +1583,15 @@ async function loadClassDetailPage() {
 
   ensureReplayModalBinding();
 
-  const id = getParam("id");
+  const id = resolveClassIdFromUrl();
+  if (!id) {
+    $("#detailTitle").textContent = "수업을 찾을 수 없습니다.";
+    showToast("수업 ID가 전달되지 않았어요. 수업 목록으로 이동합니다.", "warn");
+    setTimeout(() => { location.href = "classes.html"; }, 800);
+    return;
+  }
+  rememberClassId(id);
+
   const classes = getClasses();
   let c = classes.find(x => x.id === id);
   const user = getUser();
@@ -1591,6 +1628,8 @@ async function loadClassDetailPage() {
 
   if (!c) {
     $("#detailTitle").textContent = "수업을 찾을 수 없습니다.";
+    showToast("수업 정보를 불러오지 못했어요. 수업 목록으로 이동합니다.", "warn");
+    setTimeout(() => { location.href = "classes.html"; }, 800);
     return;
   }
 
@@ -2896,7 +2935,7 @@ function loadTeacherDashboard() {
   $$('[data-open]').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-open');
-      location.href = `class_detail.html?id=${encodeURIComponent(id)}`;
+      goClassDetail(id);
     });
   });
 
@@ -2973,7 +3012,7 @@ function loadStudentDashboard() {
   $$('[data-open]').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-open');
-      location.href = `class_detail.html?id=${encodeURIComponent(id)}`;
+      goClassDetail(id);
     });
   });
   $$('[data-live]').forEach(btn => {
@@ -2989,8 +3028,14 @@ async function loadLivePage() {
   const root = $("#liveRoot");
   if (!root) return;
 
-  const classId = getParam("id");
+  const classId = resolveClassIdFromUrl();
   const sessionNo = getParam("s") || "1";
+  if (!classId) {
+    $("#liveTitle").textContent = "수업을 찾을 수 없습니다.";
+    showToast("수업 ID가 필요합니다.", "warn");
+    return;
+  }
+  rememberClassId(classId);
   const c = getClasses().find(x => x.id === classId);
 
   if (!c) { $("#liveTitle").textContent = "수업을 찾을 수 없습니다."; return; }
@@ -3003,14 +3048,17 @@ async function loadLivePage() {
 
   if (!isOwnerTeacher && user.role === "student" && !isStudentActive) {
     alert("수강(결제) 후 라이브에 입장할 수 있어요.");
-    location.href = `class_detail.html?id=${encodeURIComponent(classId)}`;
+    goClassDetail(classId);
     return;
   }
 
   $("#liveTitle").textContent = `${c.title} (세션 ${sessionNo})`;
   $("#liveSub").textContent = `${c.category || "LIVE"} · ${c.teacher || "-"}`;
 
-  $("#sideSessionsLink")?.setAttribute("href", `class_detail.html?id=${encodeURIComponent(classId)}#sessions`);
+  $("#sideSessionsLink")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    goClassDetail(classId, "sessions");
+  });
 
   // 화면비율 변경
   const arSelect = $("#arSelect");
@@ -3580,7 +3628,7 @@ async function loadLivePage() {
 
   $("#btnLeave")?.addEventListener("click", () => {
     disconnectRoom();
-    location.href = `class_detail.html?id=${encodeURIComponent(classId)}`;
+    goClassDetail(classId);
   });
 
   // 출석 로그(학생 활성 수강자만)

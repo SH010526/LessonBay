@@ -1501,6 +1501,14 @@ app.delete("/api/replays/:id", requireAuth, requireTeacher, async (req, res) => 
 // Static frontend (online_class_platform_v4)
 const clientDir = path.join(__dirname, "..", "online_class_platform_v4");
 
+// Slug-style detail URLs (support /class_detail/:id, /live_class/:id, /classes/:id)
+app.get(["/class_detail/:id", "/live_class/:id", "/classes/:id"], (req, res, next) => {
+  const base = (req.path.split("/")[1] || "").toLowerCase();
+  const file = path.join(clientDir, `${base}.html`);
+  if (fs.existsSync(file)) return res.sendFile(file);
+  next();
+});
+
 // 깔끔한 주소: .html 요청이면 확장자 없는 경로로 리다이렉트
 app.use((req, res, next) => {
   if (req.path.endsWith(".html")) {
