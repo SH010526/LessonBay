@@ -125,21 +125,22 @@ function showLoading() {
         el.id = "globalLoading";
         el.style.position = "fixed";
         el.style.inset = "0";
-        el.style.background = "rgba(0,0,0,0.25)";
+        el.style.background = "rgba(0,0,0,0.08)";
         el.style.display = "flex";
         el.style.alignItems = "center";
         el.style.justifyContent = "center";
         el.style.zIndex = "9999";
         el.style.fontSize = "16px";
         el.style.color = "#fff";
-        el.style.backdropFilter = "blur(2px)";
-        el.innerHTML = `<div style="padding:14px 18px; background:rgba(0,0,0,0.6); border-radius:10px;">잠시만요... 처리 중이에요</div>`;
+        el.style.backdropFilter = "none";
+        el.style.pointerEvents = "none"; // 화면 상호작용 차단 안 함
+        el.innerHTML = `<div style="padding:12px 14px; background:rgba(15,23,42,0.85); border-radius:10px; box-shadow:0 8px 20px rgba(0,0,0,0.16);">잠시만요... 처리 중이에요</div>`;
         el.style.display = "none";
         document.body.appendChild(el);
       }
       el.style.display = "flex";
       loadingTimer = null;
-    }, 250); // 0.25s 이상 걸리는 요청만 오버레이 표시
+    }, 800); // 0.8s 이상 걸리는 요청만 오버레이 표시
   }
 }
 function hideLoading() {
