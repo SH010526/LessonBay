@@ -2569,7 +2569,10 @@ async function loadClassDetailPage() {
           const fbInput = document.querySelector(`[data-grade-feedback="${CSS.escape(subId)}"]`);
           const scoreVal = scoreInput?.value;
           const feedbackVal = fbInput?.value || "";
+          const originalText = btn.textContent;
           try {
+            btn.disabled = true;
+            btn.textContent = "저장중...";
             await apiPost(`/api/assignments/${encodeURIComponent(asgId)}/submissions/${encodeURIComponent(subId)}/grade`, {
               score: scoreVal === "" ? null : Number(scoreVal),
               feedback: feedbackVal,
@@ -2579,9 +2582,13 @@ async function loadClassDetailPage() {
             amap[c.id] = refreshed || [];
             setAssignments(amap);
             renderAssignments();
+            showToast("채점이 저장되었습니다.", "success");
           } catch (e) {
             console.error(e);
-            alert("채점 저장 실패");
+            alert("채점 저장 실패\n" + (e?.message || ""));
+          } finally {
+            btn.disabled = false;
+            btn.textContent = originalText || "저장";
           }
         });
       });
