@@ -874,8 +874,20 @@ async function ensureSeedData() {
   await syncLocalUserFromSupabaseSession();
   const user = getUser();
 
-  // 수업 목록 로드 (API → 비어 있으면 로컬 예제)
-  const classesPromise = (async () => {
+  // 빠른 초기 렌더: 로컬 샘플/빈 수강정보 먼저 채우고, 원격은 백그라운드로 갱신
+  setClasses(await loadLocalSampleClasses());
+  setEnrollments(user ? {} : {});
+
+  const rerenderVisible = () => {
+    if ($("#homePopular")) loadHomePopular();
+    if ($("#classGrid")) loadClassesPage();
+    if ($("#detailRoot")) loadClassDetailPage();
+    if ($("#teacherDash")) loadTeacherDashboard();
+    if ($("#studentDash")) loadStudentDashboard();
+  };
+
+  // 원격 수업 목록
+  (async () => {
     try {
       const classes = await apiGet("/api/classes", { silent: true });
       const normalized = (classes || []).map(c => ({
@@ -884,29 +896,27 @@ async function ensureSeedData() {
         teacherId: c.teacherId || c.teacher?.id || "",
         thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
       }));
-      if (normalized.length === 0) {
-        setClasses(await loadLocalSampleClasses());
-      } else {
-        setClasses(normalized);
-      }
+      if (normalized.length) setClasses(normalized);
+      rerenderVisible();
     } catch (e) {
       console.error("classes fetch failed", e);
-      setClasses(await loadLocalSampleClasses());
     }
   })();
 
-  const enrollPromise = (async () => {
-    if (!user) { setEnrollments({}); return; }
-    try {
-      const enrollList = await apiGet("/api/me/enrollments", { silent: true });
-      setEnrollments(enrollList || []);
-    } catch (e) {
-      console.error("enrollments fetch failed", e);
-      setEnrollments({});
-    }
-  })();
-
-  await Promise.all([classesPromise, enrollPromise]);
+  // 원격 수강 정보
+  if (user) {
+    (async () => {
+      try {
+        const enrollList = await apiGet("/api/me/enrollments", { silent: true });
+        setEnrollments(enrollList || []);
+        rerenderVisible();
+      } catch (e) {
+        console.error("enrollments fetch failed", e);
+      }
+    })();
+  } else {
+    setEnrollments({});
+  }
 
   // 세션 동기화 후 내비게이션 갱신
   updateNav();
