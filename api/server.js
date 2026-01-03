@@ -1005,6 +1005,35 @@ app.post("/api/assignments/:id/submissions", requireAuth, requireStudent, async 
   }
 });
 
+// Assignment grading (teacher/admin)
+app.post("/api/assignments/:assignmentId/submissions/:submissionId/grade", requireAuth, requireTeacher, async (req, res) => {
+  try {
+    const { assignmentId, submissionId } = req.params;
+    const { score, feedback } = req.body || {};
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id: assignmentId },
+      include: { class: { select: { teacherId: true } } },
+    });
+    if (!assignment) return res.status(404).json({ error: "과제를 찾을 수 없습니다." });
+    const isOwner = assignment.class.teacherId === req.user.id || req.user.role === "admin";
+    if (!isOwner) return res.status(403).json({ error: "본인 수업의 과제만 채점할 수 있습니다." });
+
+    const updated = await prisma.assignmentSubmission.update({
+      where: { id: submissionId },
+      data: {
+        score: score === null || score === undefined ? null : Number(score),
+        feedback: feedback || null,
+        gradedAt: new Date(),
+      },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error("Assignment grade error:", err);
+    res.status(500).json({ error: "과제 채점 실패", detail: err?.message || String(err) });
+  }
+});
+
 // ---------- Reviews ----------
 app.get("/api/classes/:id/reviews", requireAuth, async (req, res) => {
   try {

@@ -90,7 +90,15 @@
         </div>
       </div>
 
-      <div style="margin-top:18px;" id="sessions" data-reveal>
+      <div class="tab-nav" id="detailTabNav" style="margin-top:18px;">
+        <button class="pill active" data-tab="sessions">지난 수업</button>
+        <button class="pill" data-tab="materials">자료실</button>
+        <button class="pill" data-tab="assignments">과제</button>
+        <button class="pill" data-tab="reviews">리뷰</button>
+        <button class="pill" data-tab="qna">Q&A</button>
+      </div>
+
+      <div style="margin-top:18px;" id="sessions" data-section="sessions" data-reveal>
         <div class="card pad-lg">
           <div class="row">
             <div>
@@ -105,7 +113,7 @@
 
       <!-- 자료실 / 과제 / 리뷰 / Q&A -->
       <div style="margin-top:18px;" class="grid cols-2" data-reveal>
-        <div class="card pad-lg">
+        <div class="card pad-lg" data-section="materials">
           <div class="h2">자료실 📂</div>
           <div class="muted" style="margin-top:6px;">수업 자료를 업로드/다운로드하세요.</div>
           <div id="materialList" style="margin-top:10px;"></div>
@@ -122,7 +130,7 @@
           </div>
         </div>
 
-        <div class="card pad-lg">
+        <div class="card pad-lg" data-section="assignments">
           <div class="h2">과제 제출 ✏️</div>
           <div class="muted" style="margin-top:6px;">텍스트/링크로 제출, 선생님은 점수/피드백 입력 가능.</div>
           <div id="assignList" style="margin-top:10px;"></div>
@@ -145,7 +153,7 @@
       </div>
 
       <div style="margin-top:18px;" class="grid cols-2" data-reveal>
-        <div class="card pad-lg">
+        <div class="card pad-lg" data-section="reviews">
           <div class="h2">리뷰 🌟</div>
           <div class="muted" style="margin-top:6px;">수강한 학생이 별점과 코멘트를 남길 수 있습니다.</div>
           <div id="reviewList" style="margin-top:10px;"></div>
@@ -168,7 +176,7 @@
           </div>
         </div>
 
-        <div class="card pad-lg">
+        <div class="card pad-lg" data-section="qna">
           <div class="h2">Q&A 💬</div>
           <div class="muted" style="margin-top:6px;">질문을 남기고, 강사/학생이 댓글로 답변합니다.</div>
           <div id="qnaList" style="margin-top:10px;"></div>

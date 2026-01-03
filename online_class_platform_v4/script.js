@@ -1652,6 +1652,24 @@ async function loadClassDetailPage() {
 
   ensureReplayModalBinding();
   let assignExistingFile = null; // 학생 과제 편집 시 기존 첨부 유지/삭제용
+  const installDetailTabs = () => {
+    const pills = $$("#detailTabNav .pill");
+    const sections = $$("[data-section]");
+    const show = (key) => {
+      sections.forEach(sec => {
+        const name = sec.getAttribute("data-section");
+        sec.style.display = (name === key) ? "" : "none";
+      });
+      pills.forEach(p => {
+        p.classList.toggle("active", p.getAttribute("data-tab") === key);
+      });
+    };
+    pills.forEach(p => {
+      p.addEventListener("click", () => show(p.getAttribute("data-tab")));
+    });
+    show("sessions");
+  };
+  installDetailTabs();
 
   const id = resolveClassIdFromUrl();
   if (!id) {
@@ -2494,11 +2512,20 @@ async function loadClassDetailPage() {
                   const fUrl = s.fileUrl || s.fileData || "";
                   const fName = s.fileName || inferFileName(fUrl);
                   const fileRow = fUrl ? `<div class="session-sub"><a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank">첨부 다운로드 (${escapeHtml(fName)})</a></div>` : "";
+                  const scoreVal = (s.score ?? "") === "" || s.score === null ? "" : s.score;
+                  const feedbackVal = s.feedback || "";
                   return `
                     <div class="card" style="padding:10px 12px; background:rgba(255,255,255,.72);">
                       <div class="session-sub" style="font-weight:950;">${who} · ${when}</div>
                       <div class="session-sub" style="white-space:pre-wrap;">${txt || "(내용 없음)"}</div>
                       ${fileRow}
+                      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px;">
+                        <label style="font-size:12px; font-weight:950;">점수</label>
+                        <input type="number" min="0" max="100" step="1" value="${escapeAttr(scoreVal)}" data-grade-score="${escapeAttr(s.id)}" class="input" style="width:90px;">
+                        <label style="font-size:12px; font-weight:950;">코멘트</label>
+                        <input type="text" value="${escapeAttr(feedbackVal)}" data-grade-feedback="${escapeAttr(s.id)}" class="input" style="flex:1; min-width:180px;">
+                        <button class="btn" data-grade-save="${escapeAttr(s.id)}" data-grade-assign="${escapeAttr(a.id)}">저장</button>
+                      </div>
                     </div>
                   `;
                 }).join("")}
@@ -2511,19 +2538,28 @@ async function loadClassDetailPage() {
       : `<div class="muted" style="font-size:13px;">등록된 과제가 없습니다.</div>`;
 
     if (isOwnerTeacher) {
-      $$("[data-agrade]").forEach(btn => {
-        btn.addEventListener("click", () => {
-          const id = btn.getAttribute("data-agrade");
-          const scoreInput = document.querySelector(`[data-ascore="${CSS.escape(id)}"]`);
-          const cmtInput = document.querySelector(`[data-acmt="${CSS.escape(id)}"]`);
-          let score = Number(scoreInput?.value || 0);
-          if (Number.isNaN(score)) score = 0;
-          score = Math.max(0, Math.min(100, score));
-          const comment = (cmtInput?.value || "").trim();
-          const all = getAssignments();
-          all[c.id] = (all[c.id] || []).map(a => a.id === id ? { ...a, score, comment } : a);
-          setAssignments(all);
-          renderAssignments();
+      $$("[data-grade-save]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const subId = btn.getAttribute("data-grade-save");
+          const asgId = btn.getAttribute("data-grade-assign");
+          const scoreInput = document.querySelector(`[data-grade-score="${CSS.escape(subId)}"]`);
+          const fbInput = document.querySelector(`[data-grade-feedback="${CSS.escape(subId)}"]`);
+          const scoreVal = scoreInput?.value;
+          const feedbackVal = fbInput?.value || "";
+          try {
+            await apiPost(`/api/assignments/${encodeURIComponent(asgId)}/submissions/${encodeURIComponent(subId)}/grade`, {
+              score: scoreVal === "" ? null : Number(scoreVal),
+              feedback: feedbackVal,
+            });
+            const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`, { silent: true }).catch(() => []);
+            const amap = getAssignments();
+            amap[c.id] = refreshed || [];
+            setAssignments(amap);
+            renderAssignments();
+          } catch (e) {
+            console.error(e);
+            alert("채점 저장 실패");
+          }
         });
       });
     }
