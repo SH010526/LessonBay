@@ -2148,7 +2148,12 @@ async function loadClassDetailPage() {
     const inferFileName = (v) => {
       if (!v) return "";
       try {
-        if (v.startsWith("data:")) return "첨부파일";
+        if (v.startsWith("data:")) {
+          // data:[mime];name=<fname>;base64,...
+          const nameMatch = v.match(/;name=([^;]+);base64,/);
+          if (nameMatch && nameMatch[1]) return decodeURIComponent(nameMatch[1]);
+          return "첨부파일";
+        }
         const u = new URL(v);
         const path = u.pathname.split("/").pop() || "";
         if (path) return decodeURIComponent(path.split("?")[0]);
@@ -2179,11 +2184,6 @@ async function loadClassDetailPage() {
       if (submitBtn) submitBtn.style.display = show ? "block" : "none";
     };
 
-    // 선생님은 제출 폼을 숨김
-    if (isOwnerTeacher) {
-      if (formWrap) formWrap.style.display = "none";
-    }
-
     // 학생 편집 상태 플래그 (dataset.editing = "1" 이면 편집/제출 가능)
     let isEditingStudent = formWrap?.dataset.editing === "1";
 
@@ -2201,6 +2201,14 @@ async function loadClassDetailPage() {
         if (formWrap) formWrap.dataset.editing = "1";
         toggleStudentFields(true);
       }
+    }
+
+    // 선생님인 경우 학생 제출 섹션을 완전히 숨김
+    if (isOwnerTeacher && formWrap) {
+      formWrap.style.display = "none";
+      toggleStudentFields(false);
+      const statusEl = document.getElementById("assignStatus");
+      if (statusEl) statusEl.style.display = "none";
     }
 
     // 과제 정보 카드는 제거 (폼만 유지)
@@ -2739,9 +2747,22 @@ async function loadClassDetailPage() {
       }
     };
 
+    const encodeDataUrlWithName = (dataUrl, fname) => {
+      if (!dataUrl.startsWith("data:")) return dataUrl;
+      const parts = dataUrl.split(";base64,");
+      if (parts.length !== 2) return dataUrl;
+      const [meta, b64] = parts;
+      const name = encodeURIComponent(fname || "file");
+      return `${meta};name=${name};base64,${b64}`;
+    };
+
     if (file) {
       const reader = new FileReader();
-      reader.onload = () => saveAssignment(String(reader.result || ""));
+      reader.onload = () => {
+        const raw = String(reader.result || "");
+        const withName = encodeDataUrlWithName(raw, file.name);
+        saveAssignment(withName);
+      };
       reader.readAsDataURL(file);
     } else if (assignExistingFile?.data) {
       await saveAssignment(assignExistingFile.data);
