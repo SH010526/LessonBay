@@ -81,6 +81,7 @@ async function apiHeaders() {
 // 단순 로딩 오버레이
 let loadingCount = 0;
 let toastTimer = null;
+let loadingTimer = null;
 
 function showToast(msg, type = "info", duration = 3000) {
   if (!msg) return;
@@ -116,28 +117,37 @@ function showToast(msg, type = "info", duration = 3000) {
 
 function showLoading() {
   loadingCount += 1;
-  let el = document.getElementById("globalLoading");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "globalLoading";
-    el.style.position = "fixed";
-    el.style.inset = "0";
-    el.style.background = "rgba(0,0,0,0.25)";
-    el.style.display = "flex";
-    el.style.alignItems = "center";
-    el.style.justifyContent = "center";
-    el.style.zIndex = "9999";
-    el.style.fontSize = "16px";
-    el.style.color = "#fff";
-    el.style.backdropFilter = "blur(2px)";
-    el.innerHTML = `<div style="padding:14px 18px; background:rgba(0,0,0,0.6); border-radius:10px;">잠시만요... 처리 중이에요</div>`;
-    el.style.display = "none";
-    document.body.appendChild(el);
+  if (!loadingTimer) {
+    loadingTimer = setTimeout(() => {
+      let el = document.getElementById("globalLoading");
+      if (!el) {
+        el = document.createElement("div");
+        el.id = "globalLoading";
+        el.style.position = "fixed";
+        el.style.inset = "0";
+        el.style.background = "rgba(0,0,0,0.25)";
+        el.style.display = "flex";
+        el.style.alignItems = "center";
+        el.style.justifyContent = "center";
+        el.style.zIndex = "9999";
+        el.style.fontSize = "16px";
+        el.style.color = "#fff";
+        el.style.backdropFilter = "blur(2px)";
+        el.innerHTML = `<div style="padding:14px 18px; background:rgba(0,0,0,0.6); border-radius:10px;">잠시만요... 처리 중이에요</div>`;
+        el.style.display = "none";
+        document.body.appendChild(el);
+      }
+      el.style.display = "flex";
+      loadingTimer = null;
+    }, 250); // 0.25s 이상 걸리는 요청만 오버레이 표시
   }
-  el.style.display = "flex";
 }
 function hideLoading() {
   loadingCount = Math.max(0, loadingCount - 1);
+  if (loadingCount === 0 && loadingTimer) {
+    clearTimeout(loadingTimer);
+    loadingTimer = null;
+  }
   const el = document.getElementById("globalLoading");
   if (el && loadingCount === 0) el.style.display = "none";
 }
