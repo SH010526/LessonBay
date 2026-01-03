@@ -2112,7 +2112,7 @@ async function loadClassDetailPage() {
     assignPendingSelect = null;
     const meta = (selectedAssignId && assignMap[selectedAssignId]) ? assignMap[selectedAssignId] : (assignList[assignList.length - 1] || {});
 
-    const isOwnerTeacher = user?.role === "teacher" && ((user.id && c.teacherId && user.id === c.teacherId) || user?.name === c.teacher);
+    const isOwnerTeacher = (user?.role === "teacher") || ((user?.id && c.teacherId && user.id === c.teacherId) || user?.name === c.teacher);
     const myEmail = normalizeEmail(user?.email || "");
     const submissions = Array.isArray(meta?.submissions) ? meta.submissions : [];
     const myAssign = submissions.find(a => normalizeEmail(a.userEmail || a.studentEmail || "") === myEmail || a.studentId === user?.id) || null;
@@ -2187,8 +2187,14 @@ async function loadClassDetailPage() {
     // 학생 편집 상태 플래그 (dataset.editing = "1" 이면 편집/제출 가능)
     let isEditingStudent = formWrap?.dataset.editing === "1";
 
-    // 학생: 선택된 과제 기준으로만 편집 버튼/입력 노출 결정
-    if (!isOwnerTeacher) {
+    if (isOwnerTeacher) {
+      // 선생님: 학생 제출 폼 완전 숨김
+      toggleStudentFields(false);
+      if (formWrap) formWrap.style.display = "none";
+      const statusEl = document.getElementById("assignStatus");
+      if (statusEl) statusEl.style.display = "none";
+    } else {
+      // 학생: 선택된 과제 기준으로만 편집 버튼/입력 노출 결정
       const hasSubmission = !!myAssign;
       if (hasSubmission) {
         if (isEditingStudent) {
@@ -2201,14 +2207,6 @@ async function loadClassDetailPage() {
         if (formWrap) formWrap.dataset.editing = "1";
         toggleStudentFields(true);
       }
-    }
-
-    // 선생님인 경우 학생 제출 섹션을 완전히 숨김
-    if (isOwnerTeacher && formWrap) {
-      formWrap.style.display = "none";
-      toggleStudentFields(false);
-      const statusEl = document.getElementById("assignStatus");
-      if (statusEl) statusEl.style.display = "none";
     }
 
     // 과제 정보 카드는 제거 (폼만 유지)
