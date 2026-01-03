@@ -862,7 +862,14 @@ app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
     }
 
     const includeSubs = access.isTeacher
-      ? { include: { submissions: true } }
+      ? {
+          include: {
+            submissions: {
+              include: { student: { select: { id: true, name: true, email: true } } },
+              orderBy: { submittedAt: "desc" },
+            },
+          },
+        }
       : { include: { submissions: { where: { studentId: req.user.id } } } };
 
     const list = await prisma.assignment.findMany({

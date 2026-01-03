@@ -2107,6 +2107,33 @@ async function loadClassDetailPage() {
         renderFilePreview("");
       });
     };
+    const inferFileName = (v) => {
+      if (!v) return "";
+      try {
+        if (v.startsWith("data:")) return "첨부파일";
+        const u = new URL(v);
+        const path = u.pathname.split("/").pop() || "";
+        if (path) return decodeURIComponent(path.split("?")[0]);
+        return "첨부파일";
+      } catch (_) {
+        return "첨부파일";
+      }
+    };
+    fileEl?.addEventListener("change", () => {
+      const f = fileEl.files?.[0] || null;
+      if (f) {
+        assignExistingFile = null;
+        renderFilePreview(`${f.name} (새 첨부)`, () => {
+          fileEl.value = "";
+          assignExistingFile = null;
+          renderFilePreview("");
+        });
+      } else if (assignExistingFile) {
+        renderFilePreview(`${assignExistingFile.name} (기존 첨부)`, () => { assignExistingFile = null; });
+      } else {
+        renderFilePreview("");
+      }
+    });
     const submitBtn = submitBtnMain;
     const toggleStudentFields = (show) => {
       if (textEl) textEl.style.display = show ? "block" : "none";
@@ -2387,10 +2414,11 @@ async function loadClassDetailPage() {
           const sel = document.getElementById("assignSelect");
       if (sel && myAssign.assignId) sel.value = myAssign.assignId;
       const txt = document.getElementById("assignText");
-      if (txt) txt.value = myAssign.text || "";
-      assignExistingFile = (myAssign.fileName && (myAssign.fileData || myAssign.fileUrl)) ? {
-        name: myAssign.fileName,
-        data: myAssign.fileData || myAssign.fileUrl || ""
+      if (txt) txt.value = myAssign.content || myAssign.text || "";
+      const fileVal = myAssign.fileData || myAssign.fileUrl || "";
+      assignExistingFile = fileVal ? {
+        name: myAssign.fileName || inferFileName(fileVal),
+        data: fileVal
       } : null;
       if (fileEl) fileEl.value = "";
       if (assignExistingFile) {
@@ -2437,6 +2465,25 @@ async function loadClassDetailPage() {
             <div class="session-sub">제출 마감: ${a.dueAt ? new Date(a.dueAt).toLocaleString("ko-KR") : "마감 없음"}</div>
             <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(a.description || "")}</div>
             <div class="session-sub">제출: ${subCount}건</div>
+            ${subCount ? `
+              <div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">
+                ${a.submissions.map(s => {
+                  const when = new Date(s.submittedAt || s.at || s.updatedAt || Date.now()).toLocaleString("ko-KR");
+                  const who = escapeHtml(s.student?.name || s.studentName || s.studentEmail || s.studentId || "학생");
+                  const txt = escapeHtml(s.content || s.text || "");
+                  const fUrl = s.fileUrl || s.fileData || "";
+                  const fName = s.fileName || inferFileName(fUrl);
+                  const fileRow = fUrl ? `<div class="session-sub"><a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank">첨부 다운로드 (${escapeHtml(fName)})</a></div>` : "";
+                  return `
+                    <div class="card" style="padding:10px 12px; background:rgba(255,255,255,.72);">
+                      <div class="session-sub" style="font-weight:950;">${who} · ${when}</div>
+                      <div class="session-sub" style="white-space:pre-wrap;">${txt || "(내용 없음)"}</div>
+                      ${fileRow}
+                    </div>
+                  `;
+                }).join("")}
+              </div>
+            ` : ``}
           </div>
         </div>
       `;
