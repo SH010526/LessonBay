@@ -266,11 +266,11 @@ async function uploadToSupabaseStorage(file, prefix = "uploads") {
 
 async function resolveStorageUrl(urlOrPath) {
   ensureSupabaseClient();
-  if (!supabaseClient) return urlOrPath;
   if (!urlOrPath || /^https?:\/\//i.test(urlOrPath) || urlOrPath.startsWith("data:")) return urlOrPath;
+  if (!supabaseClient) return null;
   const { data, error } = await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(urlOrPath, 60 * 60 * 24);
-  if (error) return urlOrPath;
-  return data?.signedUrl || urlOrPath;
+  if (error) return null;
+  return data?.signedUrl || null;
 }
 async function resolveStorageDownloadUrl(path, filename) {
   ensureSupabaseClient();
@@ -556,11 +556,23 @@ async function hydrateThumb(el, raw) {
   if (!raw) { el.src = FALLBACK_THUMB; return; }
   if (isHttpLike(raw) || raw.startsWith("data:")) { el.src = raw; return; }
   el.src = FALLBACK_THUMB;
+
+  const retryCnt = Number(el.getAttribute("data-thumb-retry") || "0");
+
   try {
     const signed = await resolveStorageUrl(raw);
-    if (signed) el.src = signed;
+    if (signed && (isHttpLike(signed) || signed.startsWith("data:"))) {
+      el.src = signed;
+      return;
+    }
   } catch (_) {
-    el.src = FALLBACK_THUMB;
+    // ignore
+  }
+
+  // supabaseClient가 아직 없거나 서명 실패 시 짧게 재시도 (최대 3회)
+  if (retryCnt < 3) {
+    el.setAttribute("data-thumb-retry", String(retryCnt + 1));
+    setTimeout(() => hydrateThumb(el, raw), 400 * (retryCnt + 1));
   }
 }
 
@@ -2702,9 +2714,13 @@ async function loadClassDetailPage() {
                     </div>` : "";
                   const scoreVal = (s.score ?? "") === "" || s.score === null ? "" : s.score;
                   const feedbackVal = s.feedback || "";
+                  const gradedInfo = (scoreVal !== "" || feedbackVal)
+                    ? `저장됨 · ${new Date(s.gradedAt || s.updatedAt || Date.now()).toLocaleString("ko-KR")}`
+                    : "점수/피드백을 입력해 저장하세요.";
                   return `
                     <div class="card" style="padding:10px 12px; background:rgba(255,255,255,.72);">
                       <div class="session-sub" style="font-weight:950;">${who} · ${when}</div>
+                      <div class="session-sub" style="color:rgba(15,23,42,.6);">${gradedInfo}</div>
                       <div class="session-sub" style="white-space:pre-wrap;">${txt || "(내용 없음)"}</div>
                       ${fileRow}
                       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px;">
@@ -2739,7 +2755,6 @@ async function loadClassDetailPage() {
           const scoreRaw = scoreInput?.value;
           const feedbackVal = fbInput?.value || "";
           const originalText = btn.textContent;
-          const prevDisabled = btn.disabled;
           const scorePayload = (scoreRaw === "" || scoreRaw === null || scoreRaw === undefined)
             ? null
             : (Number.isFinite(Number(scoreRaw)) ? Number(scoreRaw) : null);
@@ -2793,8 +2808,11 @@ async function loadClassDetailPage() {
               renderAssignments();
             }
           } finally {
-            btn.disabled = prevDisabled;
-            btn.textContent = originalText || "저장";
+            btn.disabled = false;
+            btn.textContent = "저장됨";
+            setTimeout(() => {
+              btn.textContent = originalText || "저장";
+            }, 1200);
           }
         });
       });
@@ -3118,7 +3136,7 @@ async function renderReplaysList(classId) {
   async function fetchReplayVod(replayId) {
     const rp = getReplays();
     const cached = (rp[classId] || []).find((x) => x.id === replayId);
-    if (cached?.vodUrl) return resolveStorageUrl(cached.vodUrl);
+    if (cached?.vodUrl) return resolveStorageUrl(cached.vodUrl) || cached.vodUrl || "";
 
     const full = await apiGet(`/api/replays/${encodeURIComponent(replayId)}`);
     const updated = (rp[classId] || []).map((x) => (
@@ -3126,7 +3144,7 @@ async function renderReplaysList(classId) {
     ));
     rp[classId] = updated;
     setReplays(rp);
-    return full?.vodUrl ? resolveStorageUrl(full?.vodUrl) : "";
+    return full?.vodUrl ? (await resolveStorageUrl(full?.vodUrl) || full?.vodUrl || "") : "";
   }
 
   function renderList() {
