@@ -2547,7 +2547,7 @@ async function loadClassDetailPage() {
                         <input type="number" min="0" max="100" step="1" value="${escapeAttr(scoreVal)}" data-grade-score="${escapeAttr(s.id)}" class="input" style="width:90px;">
                         <label style="font-size:12px; font-weight:950;">코멘트</label>
                         <input type="text" value="${escapeAttr(feedbackVal)}" data-grade-feedback="${escapeAttr(s.id)}" class="input" style="flex:1; min-width:180px;">
-                        <button class="btn" data-grade-save="${escapeAttr(s.id)}" data-grade-assign="${escapeAttr(a.id)}">저장</button>
+                        <button class="btn" type="button" data-grade-save="${escapeAttr(s.id)}" data-grade-assign="${escapeAttr(a.id)}">저장</button>
                       </div>
                     </div>
                   `;
@@ -2563,6 +2563,8 @@ async function loadClassDetailPage() {
     if (isOwnerTeacher) {
       $$("[data-grade-save]").forEach(btn => {
         btn.addEventListener("click", async () => {
+          // 클릭 시 폼 submit 방지
+          try { btn.closest("form")?.addEventListener("submit", (ev) => ev.preventDefault(), { once: true }); } catch (_) {}
           const subId = btn.getAttribute("data-grade-save");
           const asgId = btn.getAttribute("data-grade-assign");
           const scoreInput = document.querySelector(`[data-grade-score="${CSS.escape(subId)}"]`);
