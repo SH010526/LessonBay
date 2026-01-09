@@ -736,6 +736,12 @@ async function hydrateThumb(el, raw) {
   }
 }
 
+async function ensureUserReady(timeoutMs = 1200) {
+  const sync = syncLocalUserFromSupabaseSession().catch(() => {});
+  await Promise.race([sync, sleep(timeoutMs)]);
+  return getUser();
+}
+
 function hydrateThumbs(ctx = document) {
   $$("img[data-thumb]", ctx).forEach((img) => {
     const raw = img.getAttribute("data-thumb") || "";
@@ -1164,6 +1170,7 @@ async function ensureSeedData() {
     if ($("#homePopular")) loadHomePopular();
     if ($("#classGrid")) loadClassesPage();
     if ($("#detailRoot")) loadClassDetailPage();
+    if ($("#createClassForm")) handleCreateClassPage();
     if ($("#teacherDash")) loadTeacherDashboard();
     if ($("#studentDash")) loadStudentDashboard();
   };
@@ -1469,6 +1476,19 @@ function handleLoginPage() {
   const form = $("#loginForm");
   if (!form) return;
 
+  (async () => {
+    let user = getUser();
+    if (!user) user = await ensureUserReady();
+    if (user) {
+      const dest = user.role === "teacher"
+        ? "teacher_dashboard.html"
+        : user.role === "admin"
+          ? "settings.html"
+          : "student_dashboard.html";
+      location.href = dest;
+    }
+  })();
+
   let msg = document.getElementById("loginMsg");
   if (!msg) {
     msg = document.createElement("div");
@@ -1562,10 +1582,10 @@ function handleSettingsPage() {
   const root = $("#settingsRoot");
   if (!root) return;
 
-  // 최신 role 반영 (메타데이터 변경 후 재로그인 없이도 동기화 시도)
-  syncLocalUserFromSupabaseSession().catch(() => {});
-  const user = getUser();
-  if (!user) { location.href = "login.html"; return; }
+  (async () => {
+    let user = getUser();
+    if (!user) user = await ensureUserReady();
+    if (!user) { location.href = "login.html"; return; }
 
   const info = $("#settingsInfo");
   if (info) {
@@ -1721,6 +1741,7 @@ function handleSettingsPage() {
     searchEl?.addEventListener("input", () => renderList(lastData));
     loadUsers();
   }
+  })();
 }
 
 /* ============================
@@ -3564,231 +3585,253 @@ function handleCreateClassPage() {
   const guard = $("#createGuard");
   const main = $("#createMain");
 
-  const user = getUser();
-  if (!user || user.role !== "teacher") {
-    if (guard) guard.style.display = "block";
-    if (main) main.style.display = "none";
-    return;
-  }
-
-  const sel = $("#cCategorySelect");
-  const custom = $("#cCategoryCustom");
-  const hidden = $("#cCategory");
-
-  function syncCategory() {
-    if (!sel || !hidden) return;
-    if (sel.value === "__custom__") {
-      if (custom) custom.style.display = "block";
-      hidden.value = (custom?.value || "").trim();
-    } else {
-      if (custom) custom.style.display = "none";
-      hidden.value = sel.value;
+  const applyGuard = (user) => {
+    if (!user || user.role !== "teacher") {
+      if (guard) guard.style.display = "block";
+      if (main) main.style.display = "none";
+      return false;
     }
-  }
+    if (guard) guard.style.display = "none";
+    if (main) main.style.display = "block";
+    return true;
+  };
 
-  sel?.addEventListener("change", syncCategory);
-  custom?.addEventListener("input", syncCategory);
-  syncCategory();
+  const init = () => {
+    if (form.dataset.bound === "1") return;
+    form.dataset.bound = "1";
 
-  const fileInput = $("#cThumbFile");
-  const preview = $("#cThumbPreview");
-  let thumbDataUrl = "";
-  let thumbFile = null;
+    const sel = $("#cCategorySelect");
+    const custom = $("#cCategoryCustom");
+    const hidden = $("#cCategory");
 
-  fileInput?.addEventListener("change", () => {
-    const f = fileInput.files?.[0];
-    if (!f) {
-      thumbDataUrl = "";
-      thumbFile = null;
-      if (preview) preview.style.display = "none";
-      return;
-    }
-    thumbFile = f;
-    const reader = new FileReader();
-    reader.onload = () => {
-      thumbDataUrl = String(reader.result || "");
-      if (preview) {
-        preview.src = thumbDataUrl;
-        preview.style.display = "block";
+    function syncCategory() {
+      if (!sel || !hidden) return;
+      if (sel.value === "__custom__") {
+        if (custom) custom.style.display = "block";
+        hidden.value = (custom?.value || "").trim();
+      } else {
+        if (custom) custom.style.display = "none";
+        hidden.value = sel.value;
       }
-    };
-    reader.readAsDataURL(f);
-  });
+    }
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-
-    const title = ($("#cTitle")?.value || "").trim();
+    sel?.addEventListener("change", syncCategory);
+    custom?.addEventListener("input", syncCategory);
     syncCategory();
-    const category = ($("#cCategory")?.value || "").trim();
-    const description = ($("#cDesc")?.value || "").trim();
-    const weeklyPrice = Number($("#cWeekly")?.value || 0);
-    const monthlyPrice = Number($("#cMonthly")?.value || 0);
 
-    if (!title || !category || !description) {
-      alert("제목/카테고리/설명을 입력하세요.");
-      return;
-    }
+    const fileInput = $("#cThumbFile");
+    const preview = $("#cThumbPreview");
+    let thumbDataUrl = "";
+    let thumbFile = null;
 
-    try {
-      let thumbUrlFinal = thumbDataUrl || FALLBACK_THUMB;
-      if (thumbFile) {
-        if (thumbFile.size > 50 * 1024 * 1024) {
-          alert("Supabase 무료 요금제는 파일당 50MB까지만 업로드 가능합니다.");
-          return;
+    fileInput?.addEventListener("change", () => {
+      const f = fileInput.files?.[0];
+      if (!f) {
+        thumbDataUrl = "";
+        thumbFile = null;
+        if (preview) preview.style.display = "none";
+        return;
+      }
+      thumbFile = f;
+      const reader = new FileReader();
+      reader.onload = () => {
+        thumbDataUrl = String(reader.result || "");
+        if (preview) {
+          preview.src = thumbDataUrl;
+          preview.style.display = "block";
         }
-        const uploaded = await uploadToSupabaseStorage(thumbFile, "class-thumbs");
-        thumbUrlFinal = uploaded.path || FALLBACK_THUMB;
+      };
+      reader.readAsDataURL(f);
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const title = ($("#cTitle")?.value || "").trim();
+      syncCategory();
+      const category = ($("#cCategory")?.value || "").trim();
+      const description = ($("#cDesc")?.value || "").trim();
+      const weeklyPrice = Number($("#cWeekly")?.value || 0);
+      const monthlyPrice = Number($("#cMonthly")?.value || 0);
+
+      if (!title || !category || !description) {
+        alert("제목/카테고리/설명을 입력하세요.");
+        return;
       }
 
-      await apiPost("/api/classes", {
-        title,
-        category,
-        description,
-        weeklyPrice,
-        monthlyPrice,
-        thumbUrl: thumbUrlFinal,
-      });
-      const refreshed = await apiGet("/api/classes").catch(() => []);
-      setClasses(refreshed || []);
-      alert("수업 생성 완료!");
-      location.href = "teacher_dashboard.html";
-    } catch (e) {
-      console.error(e);
-      alert("수업 생성 실패\n" + (e?.message || ""));
-    }
-  });
+      try {
+        let thumbUrlFinal = thumbDataUrl || FALLBACK_THUMB;
+        if (thumbFile) {
+          if (thumbFile.size > 50 * 1024 * 1024) {
+            alert("Supabase 무료 요금제는 파일당 50MB까지만 업로드 가능합니다.");
+            return;
+          }
+          const uploaded = await uploadToSupabaseStorage(thumbFile, "class-thumbs");
+          thumbUrlFinal = uploaded.path || FALLBACK_THUMB;
+        }
+
+        await apiPost("/api/classes", {
+          title,
+          category,
+          description,
+          weeklyPrice,
+          monthlyPrice,
+          thumbUrl: thumbUrlFinal,
+        });
+        const refreshed = await apiGet("/api/classes").catch(() => []);
+        setClasses(refreshed || []);
+        alert("수업 생성 완료!");
+        location.href = "teacher_dashboard.html";
+      } catch (e) {
+        console.error(e);
+        alert("수업 생성 실패\n" + (e?.message || ""));
+      }
+    });
+  };
+
+  (async () => {
+    let user = getUser();
+    if (!user) user = await ensureUserReady();
+    if (!applyGuard(user)) return;
+    init();
+  })();
 }
 
 function loadTeacherDashboard() {
   const wrap = $("#teacherClassList");
   if (!wrap) return;
 
-  const user = getUser();
-  if (!user) { location.href = "login.html"; return; }
-  if (user.role !== "teacher") { location.href = "student_dashboard.html"; return; }
+  (async () => {
+    let user = getUser();
+    if (!user) user = await ensureUserReady();
+    if (!user) { location.href = "login.html"; return; }
+    if (user.role !== "teacher") { location.href = "student_dashboard.html"; return; }
 
-  const mine = getClasses().filter(c => c.teacher === user.name);
+    const mine = getClasses().filter(c => c.teacher === user.name);
 
-  wrap.innerHTML = `
-    <div class="grid cols-2">
-      ${mine.map(c => `
-        <div class="class-card wide" style="cursor:default;">
-          <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
-          <div class="class-body">
-            <div class="title2">${escapeHtml(c.title)}</div>
-            <div class="sub2">카테고리 · ${escapeHtml(c.category || "-")}</div>
-            <div class="desc2">${escapeHtml(c.description || "")}</div>
-            <div class="chips">
-              <span class="chip">${won(c.weeklyPrice)}</span>
-              <span class="chip secondary">${won(c.monthlyPrice)}</span>
-            </div>
-            <div class="card-actions">
-              <button class="btn primary" data-open="${escapeAttr(c.id)}">상세</button>
-              <button class="btn" data-live="${escapeAttr(c.id)}">라이브</button>
-              <button class="btn danger" data-del="${escapeAttr(c.id)}">삭제</button>
+    wrap.innerHTML = `
+      <div class="grid cols-2">
+        ${mine.map(c => `
+          <div class="class-card wide" style="cursor:default;">
+            <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
+            <div class="class-body">
+              <div class="title2">${escapeHtml(c.title)}</div>
+              <div class="sub2">카테고리 · ${escapeHtml(c.category || "-")}</div>
+              <div class="desc2">${escapeHtml(c.description || "")}</div>
+              <div class="chips">
+                <span class="chip">${won(c.weeklyPrice)}</span>
+                <span class="chip secondary">${won(c.monthlyPrice)}</span>
+              </div>
+              <div class="card-actions">
+                <button class="btn primary" data-open="${escapeAttr(c.id)}">상세</button>
+                <button class="btn" data-live="${escapeAttr(c.id)}">라이브</button>
+                <button class="btn danger" data-del="${escapeAttr(c.id)}">삭제</button>
+              </div>
             </div>
           </div>
-        </div>
-      `).join("")}
-    </div>
-    ${mine.length ? "" : `<p class="muted" style="margin-top:12px;">아직 만든 수업이 없어요.</p>`}
-  `;
+        `).join("")}
+      </div>
+      ${mine.length ? "" : `<p class="muted" style="margin-top:12px;">아직 만든 수업이 없어요.</p>`}
+    `;
 
-  hydrateThumbs(wrap);
+    hydrateThumbs(wrap);
 
-  $$('[data-open]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-open');
-      goClassDetail(id);
+    $$('[data-open]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-open');
+        goClassDetail(id);
+      });
     });
-  });
 
-  $$('[data-live]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-live');
-      location.href = `live_class.html?id=${encodeURIComponent(id)}&s=1`;
+    $$('[data-live]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-live');
+        location.href = `live_class.html?id=${encodeURIComponent(id)}&s=1`;
+      });
     });
-  });
 
-  $$('[data-del]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-del');
-      if (!id) return;
-      if (!confirm("해당 수업을 삭제할까요? (관련 녹화/자료/과제/채팅도 함께 삭제됩니다)")) return;
-      (async () => {
-        try {
-          await apiRequest(`/api/classes/${encodeURIComponent(id)}`, "DELETE");
-          const refreshed = await apiGet("/api/classes").catch(() => []);
-          setClasses(refreshed || []);
-          alert("수업을 삭제했습니다.");
-          loadTeacherDashboard(); // 리스트 갱신
-        } catch (e) {
-          console.error(e);
-          alert("수업 삭제 실패\n" + (e?.message || ""));
-        }
-      })();
+    $$('[data-del]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-del');
+        if (!id) return;
+        if (!confirm("해당 수업을 삭제할까요? (관련 녹화/자료/과제/채팅도 함께 삭제됩니다)")) return;
+        (async () => {
+          try {
+            await apiRequest(`/api/classes/${encodeURIComponent(id)}`, "DELETE");
+            const refreshed = await apiGet("/api/classes").catch(() => []);
+            setClasses(refreshed || []);
+            alert("수업을 삭제했습니다.");
+            loadTeacherDashboard(); // 리스트 갱신
+          } catch (e) {
+            console.error(e);
+            alert("수업 삭제 실패\n" + (e?.message || ""));
+          }
+        })();
+      });
     });
-  });
+  })();
 }
 
 function loadStudentDashboard() {
   const wrap = $("#studentClassList");
   if (!wrap) return;
 
-  const user = getUser();
-  if (!user) { location.href = "login.html"; return; }
-  if (user.role !== "student") { location.href = "teacher_dashboard.html"; return; }
+  (async () => {
+    let user = getUser();
+    if (!user) user = await ensureUserReady();
+    if (!user) { location.href = "login.html"; return; }
+    if (user.role !== "student") { location.href = "teacher_dashboard.html"; return; }
 
-  const classes = getClasses().filter(c => !!readEnrollmentForUser(user, c.id));
+    const classes = getClasses().filter(c => !!readEnrollmentForUser(user, c.id));
 
-  wrap.innerHTML = `
-    <div class="grid cols-2">
-      ${classes.map(c => {
-        const e = readEnrollmentForUser(user, c.id);
-        const active = isEnrollmentActiveForUser(user, c.id);
-        const endText = e?.endAt ? fmtDateKR(e.endAt) : (e?.endDate || "-");
-        return `
-          <div class="class-card wide" style="cursor:default;">
-            <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
-            <div class="class-body">
-              <div class="title2">${escapeHtml(c.title)}</div>
-              <div class="sub2">선생님 · ${escapeHtml(c.teacher || "-")} · ${escapeHtml(c.category || "-")}</div>
-              <div class="desc2">
-                상태: ${active ? `<span class="chip mint" style="display:inline-flex;">수강중</span>` : `<span class="chip" style="display:inline-flex;background:rgba(245,158,11,.12);">만료</span>`}
-                · 종료: ${endText}
-              </div>
-              <div class="chips">
-                <span class="chip">${won(e?.paidAmount ?? 0)}</span>
-                <span class="chip secondary">${e?.planType === "weekly" ? `${e?.duration ?? "-"}주` : `${e?.duration ?? "-"}개월`}</span>
-              </div>
-              <div class="card-actions">
-                <button class="btn primary" data-open="${escapeAttr(c.id)}">상세</button>
-                <button class="btn" data-live="${escapeAttr(c.id)}" ${active ? "" : "disabled"}>라이브</button>
+    wrap.innerHTML = `
+      <div class="grid cols-2">
+        ${classes.map(c => {
+          const e = readEnrollmentForUser(user, c.id);
+          const active = isEnrollmentActiveForUser(user, c.id);
+          const endText = e?.endAt ? fmtDateKR(e.endAt) : (e?.endDate || "-");
+          return `
+            <div class="class-card wide" style="cursor:default;">
+              <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
+              <div class="class-body">
+                <div class="title2">${escapeHtml(c.title)}</div>
+                <div class="sub2">선생님 · ${escapeHtml(c.teacher || "-")} · ${escapeHtml(c.category || "-")}</div>
+                <div class="desc2">
+                  상태: ${active ? `<span class="chip mint" style="display:inline-flex;">수강중</span>` : `<span class="chip" style="display:inline-flex;background:rgba(245,158,11,.12);">만료</span>`}
+                  · 종료: ${endText}
+                </div>
+                <div class="chips">
+                  <span class="chip">${won(e?.paidAmount ?? 0)}</span>
+                  <span class="chip secondary">${e?.planType === "weekly" ? `${e?.duration ?? "-"}주` : `${e?.duration ?? "-"}개월`}</span>
+                </div>
+                <div class="card-actions">
+                  <button class="btn primary" data-open="${escapeAttr(c.id)}">상세</button>
+                  <button class="btn" data-live="${escapeAttr(c.id)}" ${active ? "" : "disabled"}>라이브</button>
+                </div>
               </div>
             </div>
-          </div>
-        `;
-      }).join("")}
-    </div>
-    ${classes.length ? "" : `<p class="muted" style="margin-top:12px;">아직 수강 중인 수업이 없어요.</p>`}
-  `;
+          `;
+        }).join("")}
+      </div>
+      ${classes.length ? "" : `<p class="muted" style="margin-top:12px;">아직 수강 중인 수업이 없어요.</p>`}
+    `;
 
-  $$('[data-open]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-open');
-      goClassDetail(id);
+    $$('[data-open]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-open');
+        goClassDetail(id);
+      });
     });
-  });
-  $$('[data-live]').forEach(btn => {
-    btn.highlightBound = "1";
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-live');
-      location.href = `live_class.html?id=${encodeURIComponent(id)}&s=1`;
+    $$('[data-live]').forEach(btn => {
+      btn.highlightBound = "1";
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-live');
+        location.href = `live_class.html?id=${encodeURIComponent(id)}&s=1`;
+      });
     });
-  });
 
-  hydrateThumbs(wrap);
+    hydrateThumbs(wrap);
+  })();
 }
 
 async function loadLivePage() {
@@ -3807,7 +3850,8 @@ async function loadLivePage() {
 
   if (!c) { $("#liveTitle").textContent = "수업을 찾을 수 없습니다."; return; }
 
-  const user = getUser();
+  let user = getUser();
+  if (!user) user = await ensureUserReady();
   if (!user) { alert("로그인이 필요합니다."); location.href = "login.html"; return; }
 
   const isOwnerTeacher = (user.role === "teacher" && ((user.id && c.teacherId && user.id === c.teacherId) || user.name === c.teacher));
