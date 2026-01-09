@@ -295,22 +295,78 @@ function parseSupabaseStorageUrl(urlStr) {
   }
 }
 
+const STORAGE_SIGN_TTL_MS = 1000 * 60 * 20;
+const storageSignedCache = new Map();
+
+function getCachedSignedUrl(key) {
+  const hit = storageSignedCache.get(key);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    storageSignedCache.delete(key);
+    return null;
+  }
+  return hit.url || null;
+}
+
+function setCachedSignedUrl(key, url) {
+  if (!url) return;
+  storageSignedCache.set(key, { url, expiresAt: Date.now() + STORAGE_SIGN_TTL_MS });
+}
+
+async function signStorageViaApi(bucket, path, filename) {
+  if (!path) return null;
+  try {
+    const params = new URLSearchParams();
+    if (bucket) params.set("bucket", bucket);
+    params.set("path", path);
+    if (filename) params.set("download", filename);
+    const res = await apiGet(`/api/storage/sign?${params.toString()}`, { silent: true });
+    return res?.signedUrl || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function resolveStorageUrl(urlOrPath) {
   ensureSupabaseClient();
   if (!urlOrPath || urlOrPath.startsWith("data:")) return urlOrPath;
   if (isHttpLike(urlOrPath)) {
     const parsed = parseSupabaseStorageUrl(urlOrPath);
     if (!parsed) return urlOrPath;
-    if (!supabaseClient) return buildPublicStorageUrl(parsed.path, parsed.bucket);
-    const { data, error } = await supabaseClient.storage.from(parsed.bucket).createSignedUrl(parsed.path, 60 * 60 * 24);
-    if (error) return buildPublicStorageUrl(parsed.path, parsed.bucket);
-    return data?.signedUrl || buildPublicStorageUrl(parsed.path, parsed.bucket);
+    const cacheKey = `view:${parsed.bucket}/${parsed.path}`;
+    const cached = getCachedSignedUrl(cacheKey);
+    if (cached) return cached;
+    if (supabaseClient) {
+      const { data, error } = await supabaseClient.storage.from(parsed.bucket).createSignedUrl(parsed.path, 60 * 60 * 24);
+      if (!error && data?.signedUrl) {
+        setCachedSignedUrl(cacheKey, data.signedUrl);
+        return data.signedUrl;
+      }
+    }
+    const apiSigned = await signStorageViaApi(parsed.bucket, parsed.path);
+    if (apiSigned) {
+      setCachedSignedUrl(cacheKey, apiSigned);
+      return apiSigned;
+    }
+    return buildPublicStorageUrl(parsed.path, parsed.bucket) || urlOrPath;
   }
-  if (!supabaseClient) return buildPublicStorageUrl(urlOrPath);
   const norm = normalizeStoragePath(urlOrPath, STORAGE_BUCKET);
-  const { data, error } = await supabaseClient.storage.from(norm.bucket).createSignedUrl(norm.path, 60 * 60 * 24);
-  if (error) return buildPublicStorageUrl(norm.path, norm.bucket);
-  return data?.signedUrl || buildPublicStorageUrl(norm.path, norm.bucket);
+  const cacheKey = `view:${norm.bucket}/${norm.path}`;
+  const cached = getCachedSignedUrl(cacheKey);
+  if (cached) return cached;
+  if (supabaseClient) {
+    const { data, error } = await supabaseClient.storage.from(norm.bucket).createSignedUrl(norm.path, 60 * 60 * 24);
+    if (!error && data?.signedUrl) {
+      setCachedSignedUrl(cacheKey, data.signedUrl);
+      return data.signedUrl;
+    }
+  }
+  const apiSigned = await signStorageViaApi(norm.bucket, norm.path);
+  if (apiSigned) {
+    setCachedSignedUrl(cacheKey, apiSigned);
+    return apiSigned;
+  }
+  return buildPublicStorageUrl(norm.path, norm.bucket) || urlOrPath;
 }
 async function resolveStorageDownloadUrl(path, filename) {
   ensureSupabaseClient();
@@ -330,19 +386,43 @@ async function resolveStorageDownloadUrl(path, filename) {
   if (/^https?:\/\//i.test(path) || path.startsWith("data:")) {
     const parsed = parseSupabaseStorageUrl(path);
     if (!parsed) return addDownloadParam(path, filename || "download");
-    if (!supabaseClient) return addDownloadParam(buildPublicStorageUrl(parsed.path, parsed.bucket) || path, filename || "download");
-    const opts2 = filename ? { download: filename } : undefined;
-    const { data, error } = await supabaseClient.storage.from(parsed.bucket).createSignedUrl(parsed.path, 60 * 60 * 24, opts2);
-    if (error) return addDownloadParam(buildPublicStorageUrl(parsed.path, parsed.bucket) || path, filename || "download");
-    return addDownloadParam(data?.signedUrl || path, filename || "download");
+    const cacheKey = `dl:${parsed.bucket}/${parsed.path}?${filename || ""}`;
+    const cached = getCachedSignedUrl(cacheKey);
+    if (cached) return addDownloadParam(cached, filename || "download");
+    if (supabaseClient) {
+      const opts2 = filename ? { download: filename } : undefined;
+      const { data, error } = await supabaseClient.storage.from(parsed.bucket).createSignedUrl(parsed.path, 60 * 60 * 24, opts2);
+      if (!error && data?.signedUrl) {
+        setCachedSignedUrl(cacheKey, data.signedUrl);
+        return addDownloadParam(data.signedUrl, filename || "download");
+      }
+    }
+    const apiSigned = await signStorageViaApi(parsed.bucket, parsed.path, filename);
+    if (apiSigned) {
+      setCachedSignedUrl(cacheKey, apiSigned);
+      return addDownloadParam(apiSigned, filename || "download");
+    }
+    return addDownloadParam(buildPublicStorageUrl(parsed.path, parsed.bucket) || path, filename || "download");
   }
 
   const norm = normalizeStoragePath(path, STORAGE_BUCKET);
-  if (!supabaseClient) return buildPublicStorageUrl(norm.path, norm.bucket) || path;
-  const opts = filename ? { download: filename } : undefined;
-  const { data, error } = await supabaseClient.storage.from(norm.bucket).createSignedUrl(norm.path, 60 * 60 * 24, opts);
-  if (error) return buildPublicStorageUrl(norm.path, norm.bucket) || path;
-  return addDownloadParam(data?.signedUrl || path, filename || "download");
+  const cacheKey = `dl:${norm.bucket}/${norm.path}?${filename || ""}`;
+  const cached = getCachedSignedUrl(cacheKey);
+  if (cached) return addDownloadParam(cached, filename || "download");
+  if (supabaseClient) {
+    const opts = filename ? { download: filename } : undefined;
+    const { data, error } = await supabaseClient.storage.from(norm.bucket).createSignedUrl(norm.path, 60 * 60 * 24, opts);
+    if (!error && data?.signedUrl) {
+      setCachedSignedUrl(cacheKey, data.signedUrl);
+      return addDownloadParam(data.signedUrl, filename || "download");
+    }
+  }
+  const apiSigned = await signStorageViaApi(norm.bucket, norm.path, filename);
+  if (apiSigned) {
+    setCachedSignedUrl(cacheKey, apiSigned);
+    return addDownloadParam(apiSigned, filename || "download");
+  }
+  return buildPublicStorageUrl(norm.path, norm.bucket) || path;
 }
 
 function encodeDataUrlWithName(dataUrl, fname) {
@@ -354,25 +434,32 @@ function encodeDataUrlWithName(dataUrl, fname) {
   return `${meta};name=${name};base64,${b64}`;
 }
 
+function triggerDownload(url, filename = "download") {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || "download";
+  a.rel = "noopener";
+  a.target = "_self";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 async function forceDownload(url, filename = "download") {
   try {
-    const res = await fetch(url, { mode: "cors" });
-    if (!res.ok) throw new Error(`download failed: ${res.status}`);
-    const blob = await res.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = blobUrl;
-    a.download = filename;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+    if (!url) throw new Error("empty url");
+    if (url.startsWith("data:") || url.startsWith("blob:")) {
+      triggerDownload(url, filename);
+      showToast("다운로드를 시작했습니다.", "success");
+      return;
+    }
+    triggerDownload(url, filename);
     showToast("다운로드를 시작했습니다.", "success");
   } catch (err) {
     console.error("forceDownload failed", err);
-    // 마지막 수단: 새 탭에서 열어주기
-    window.open(url, "_blank");
+    // 마지막 수단: 현재 탭 이동 (팝업 차단 방지)
+    try { location.href = url; } catch (_) {}
   }
 }
 
@@ -604,14 +691,14 @@ function isHttpLike(u) {
 function initialThumbSrc(raw) {
   if (!raw) return FALLBACK_THUMB;
   if (isHttpLike(raw) || raw.startsWith("data:")) return raw;
-  return buildPublicStorageUrl(raw) || FALLBACK_THUMB;
+  return FALLBACK_THUMB;
 }
 
 async function hydrateThumb(el, raw) {
   if (!el) return;
   if (!raw) { el.src = FALLBACK_THUMB; return; }
   if (isHttpLike(raw) || raw.startsWith("data:")) { el.src = raw; }
-  else { el.src = buildPublicStorageUrl(raw) || FALLBACK_THUMB; }
+  else { el.src = FALLBACK_THUMB; }
 
   const retryCnt = Number(el.getAttribute("data-thumb-retry") || "0");
   if (!el.dataset.thumbErrorBound) {
@@ -2419,21 +2506,29 @@ function ensureProtectedData() {
         renderFilePreview("");
       });
     };
+    const stripTimestampPrefix = (name) => {
+      if (!name) return "";
+      return String(name).replace(/^\d{10,}-/, "") || String(name);
+    };
     const inferFileName = (v) => {
       if (!v) return "";
       try {
         if (v.startsWith("data:")) {
           // data:[mime];name=<fname>;base64,...
           const nameMatch = v.match(/;name=([^;]+);base64,/);
-          if (nameMatch && nameMatch[1]) return decodeURIComponent(nameMatch[1]);
-          return "첨부파일";
+          if (nameMatch && nameMatch[1]) return stripTimestampPrefix(decodeURIComponent(nameMatch[1]));
+          return "첨부 파일";
+        }
+        if (!isHttpLike(v)) {
+          const base = v.split("/").pop() || "";
+          return stripTimestampPrefix(decodeURIComponent(base)) || "첨부 파일";
         }
         const u = new URL(v);
         const path = u.pathname.split("/").pop() || "";
-        if (path) return decodeURIComponent(path.split("?")[0]);
-        return "첨부파일";
+        if (path) return stripTimestampPrefix(decodeURIComponent(path.split("?")[0])) || "첨부 파일";
+        return "첨부 파일";
       } catch (_) {
-        return "첨부파일";
+        return "첨부 파일";
       }
     };
     fileEl?.addEventListener("change", () => {
@@ -2729,11 +2824,15 @@ function ensureProtectedData() {
           ${myAssign.url ? `<div class="session-sub"><a href="${escapeAttr(myAssign.url)}" target="_blank">링크 열기</a></div>` : ``}
           ${(() => {
             const fUrl = myAssign.fileData || myAssign.fileUrl || "";
-            const fName = myAssign.fileName || inferFileName(fUrl);
+            const fName = myAssign.fileName || inferFileName(fUrl) || "첨부 파일";
             if (!fUrl) return ``;
+            const isDirect = isHttpLike(fUrl) || fUrl.startsWith("data:");
+            const linkHtml = isDirect
+              ? `<a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>`
+              : `<a href="#" data-download-path="${escapeAttr(fUrl)}" data-file-name="${escapeAttr(fName)}" style="font-weight:700; text-decoration:underline;">${escapeHtml(fName)}</a>`;
             return `<div class="session-sub" style="display:flex; gap:8px; align-items:center;">
               <span class="chip secondary" style="padding:4px 8px;">첨부</span>
-              <a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>
+              ${linkHtml}
             </div>`;
           })()}
           <div style="margin-top:8px;">
@@ -2784,6 +2883,7 @@ function ensureProtectedData() {
       }
       renderFilePreview("");
     }
+    attachSubmissionFileFetchHandlers();
     return;
     }
 
@@ -2973,6 +3073,28 @@ function ensureProtectedData() {
         }
       };
       link.addEventListener("click", handler, { once: true });
+    });
+    $$("[data-download-path]").forEach(link => {
+      if (link.dataset.downloadBound === "1") return;
+      link.dataset.downloadBound = "1";
+      link.addEventListener("click", async (e) => {
+        e.preventDefault();
+        const path = link.getAttribute("data-download-path") || "";
+        const fname = link.getAttribute("data-file-name") || "첨부 파일";
+        try {
+          link.classList.add("is-loading");
+          link.textContent = "불러오는 중...";
+          const url = await resolveStorageDownloadUrl(path, fname);
+          if (!url) throw new Error("첨부가 없습니다.");
+          const finalUrl = url.startsWith("data:") ? encodeDataUrlWithName(url, fname) : url;
+          await forceDownload(finalUrl, fname);
+        } catch (err) {
+          alert("첨부를 불러오지 못했습니다.\n" + (err?.message || ""));
+        } finally {
+          link.classList.remove("is-loading");
+          link.textContent = fname;
+        }
+      });
     });
   }
 
@@ -4330,10 +4452,7 @@ function init() {
   if ($("#studentDash")) loadStudentDashboard();
   if ($("#liveRoot")) loadLivePage();
 
-  ensureSeedData().then(() => {
-    // 사용자/데이터 동기화 이후에만 상세 렌더 (교사/학생 깜빡임 방지)
-    if ($("#detailRoot")) loadClassDetailPage();
-  });
+  ensureSeedData();
 
   if (getPath() === "logout.html") doLogout(true);
 }

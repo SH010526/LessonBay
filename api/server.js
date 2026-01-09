@@ -121,17 +121,28 @@ function setCacheHeaders(res, maxAgeSec = 30, swrSec = 120) {
   res.set("Cache-Control", `public, max-age=${maxAgeSec}, stale-while-revalidate=${swrSec}`);
 }
 
+function stripTimestampPrefix(name) {
+  if (!name) return "";
+  return String(name).replace(/^\d{10,}-/, "") || String(name);
+}
+
 function inferFileNameFromUrl(url) {
   if (!url) return "";
   try {
     if (String(url).startsWith("data:")) {
       const nameMatch = String(url).match(/;name=([^;]+);base64,/);
-      if (nameMatch && nameMatch[1]) return decodeURIComponent(nameMatch[1]);
-      return "첨부파일";
+      if (nameMatch && nameMatch[1]) return stripTimestampPrefix(decodeURIComponent(nameMatch[1]));
+      return "attachment";
     }
-    const u = new URL(String(url));
+    const raw = String(url);
+    if (!/^https?:\/\//i.test(raw)) {
+      const base = raw.split("/").pop() || "";
+      return stripTimestampPrefix(decodeURIComponent(base));
+    }
+    const u = new URL(raw);
     const path = u.pathname.split("/").pop() || "";
-    return path ? decodeURIComponent(path.split("?")[0]) : "";
+    const decoded = path ? decodeURIComponent(path.split("?")[0]) : "";
+    return stripTimestampPrefix(decoded);
   } catch (_) {
     return "";
   }
@@ -296,9 +307,11 @@ function logError(err, req) {
 }
 
 // RLS가 켜져 있으면 삽입이 막히므로 비활성화 (Supabase 테이블)
+let replayRlsDisabled = false;
 async function disableRlsIfOn() {
   try {
     await prisma.$executeRawUnsafe('ALTER TABLE "public"."Replay" DISABLE ROW LEVEL SECURITY;');
+    replayRlsDisabled = true;
   } catch (e) {
     console.error("disableRlsIfOn failed:", e);
   }
@@ -745,7 +758,9 @@ app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
   try {
     const classId = req.params.id;
     // RLS가 켜져 있으면 삽입이 막히므로 비활성화 시도
-    try { await prisma.$executeRawUnsafe('ALTER TABLE "public"."Replay" DISABLE ROW LEVEL SECURITY;'); } catch (_) {}
+    if (!replayRlsDisabled) {
+      await disableRlsIfOn();
+    }
 
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
     if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
@@ -1131,6 +1146,32 @@ app.get("/api/submissions/:id/file", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("Submission file fetch error:", err);
     res.status(500).json({ error: "첨부 조회 실패", detail: err?.message || String(err) });
+  }
+});
+
+// Storage signed URL (server-side signing for private bucket)
+app.get("/api/storage/sign", async (req, res) => {
+  try {
+    const bucket = String(req.query.bucket || "LessonBay");
+    const rawPath = String(req.query.path || "");
+    const download = req.query.download ? String(req.query.download) : "";
+    if (!rawPath) return res.status(400).json({ error: "path is required" });
+
+    const cleanPath = rawPath.replace(/^\/+/, "");
+    const prefix = cleanPath.split("/")[0] || "";
+    const allowedPrefixes = new Set(["class-thumbs", "materials", "replays", "uploads"]);
+    if (!allowedPrefixes.has(prefix)) {
+      return res.status(400).json({ error: "path not allowed" });
+    }
+    const opts = download ? { download } : undefined;
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(cleanPath, 60 * 60 * 24, opts);
+    if (error) {
+      return res.status(400).json({ error: "sign failed", detail: error.message || String(error) });
+    }
+    res.json({ signedUrl: data?.signedUrl || null });
+  } catch (err) {
+    console.error("storage sign error:", err);
+    res.status(500).json({ error: "storage sign failed" });
   }
 });
 
@@ -1667,7 +1708,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.static(clientDir));
+app.use(express.static(clientDir, { maxAge: "5m" }));
 app.get("*", (req, res) => {
   res.sendFile(path.join(clientDir, "index.html"));
 });
