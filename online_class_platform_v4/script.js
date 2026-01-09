@@ -264,13 +264,19 @@ async function uploadToSupabaseStorage(file, prefix = "uploads") {
   return { path, signedUrl: signed?.signedUrl || null };
 }
 
+function buildPublicStorageUrl(path) {
+  if (!path || isHttpLike(path) || path.startsWith("data:")) return path || null;
+  const clean = path.replace(/^\/+/, "");
+  return `${SUPABASE_URL}/storage/v1/object/public/${clean}`;
+}
+
 async function resolveStorageUrl(urlOrPath) {
   ensureSupabaseClient();
   if (!urlOrPath || /^https?:\/\//i.test(urlOrPath) || urlOrPath.startsWith("data:")) return urlOrPath;
-  if (!supabaseClient) return null;
+  if (!supabaseClient) return buildPublicStorageUrl(urlOrPath);
   const { data, error } = await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(urlOrPath, 60 * 60 * 24);
-  if (error) return null;
-  return data?.signedUrl || null;
+  if (error) return buildPublicStorageUrl(urlOrPath);
+  return data?.signedUrl || buildPublicStorageUrl(urlOrPath);
 }
 async function resolveStorageDownloadUrl(path, filename) {
   ensureSupabaseClient();
@@ -548,21 +554,22 @@ function isHttpLike(u) {
 function initialThumbSrc(raw) {
   if (!raw) return FALLBACK_THUMB;
   if (isHttpLike(raw) || raw.startsWith("data:")) return raw;
-  return FALLBACK_THUMB;
+  return buildPublicStorageUrl(raw) || FALLBACK_THUMB;
 }
 
 async function hydrateThumb(el, raw) {
   if (!el) return;
   if (!raw) { el.src = FALLBACK_THUMB; return; }
   if (isHttpLike(raw) || raw.startsWith("data:")) { el.src = raw; return; }
-  el.src = FALLBACK_THUMB;
+  el.src = buildPublicStorageUrl(raw) || FALLBACK_THUMB;
 
   const retryCnt = Number(el.getAttribute("data-thumb-retry") || "0");
 
   try {
     const signed = await resolveStorageUrl(raw);
-    if (signed && (isHttpLike(signed) || signed.startsWith("data:"))) {
-      el.src = signed;
+    const candidate = signed || buildPublicStorageUrl(raw);
+    if (candidate && (isHttpLike(candidate) || candidate.startsWith("data:"))) {
+      el.src = candidate;
       return;
     }
   } catch (_) {
@@ -2160,6 +2167,8 @@ async function loadClassDetailPage() {
 
   refreshGates();
   bindEnterClicks();
+  ensureProtectedData();
+  setTimeout(() => ensureProtectedData(), 1500); // 세션 동기화 지연 대비 재시도
 
   buyBtn?.addEventListener("click", async () => {
     const user = getUser();
@@ -2708,27 +2717,39 @@ async function loadClassDetailPage() {
                   const txt = escapeHtml(s.content || s.text || "");
                   const fUrl = s.fileUrl || s.fileData || "";
                   const fName = s.fileName || inferFileName(fUrl);
-                  const fileRow = (fUrl || s.hasFile) ? `<div class="session-sub" style="display:flex; gap:8px; align-items:center;">
+                  const fileRow = (fUrl || s.hasFile) ? `<div class="session-sub" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                       <span class="chip secondary" style="padding:4px 8px;">첨부</span>
-                      ${fUrl ? `<a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>` : `<button class="btn" type="button" data-fetch-file="${escapeAttr(s.id)}" data-file-name="${escapeAttr(fName)}">첨부 열기</button>`}
+                      ${fUrl
+                        ? `<a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>`
+                        : `<a href="#" data-fetch-file="${escapeAttr(s.id)}" data-file-name="${escapeAttr(fName)}" style="font-weight:700; text-decoration:underline;">${escapeHtml(fName)}</a>`}
                     </div>` : "";
                   const scoreVal = (s.score ?? "") === "" || s.score === null ? "" : s.score;
                   const feedbackVal = s.feedback || "";
                   const gradedInfo = (scoreVal !== "" || feedbackVal)
                     ? `저장됨 · ${new Date(s.gradedAt || s.updatedAt || Date.now()).toLocaleString("ko-KR")}`
                     : "점수/피드백을 입력해 저장하세요.";
+                  const savedDisplay = `
+                    <div class="session-sub" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                      <span class="chip" style="padding:4px 8px;">점수</span>
+                      <strong>${scoreVal === "" ? "미입력" : `${escapeHtml(scoreVal)}점`}</strong>
+                      <span class="chip" style="padding:4px 8px;">코멘트</span>
+                      <span>${feedbackVal ? escapeHtml(feedbackVal) : "미입력"}</span>
+                    </div>
+                  `;
                   return `
                     <div class="card" style="padding:10px 12px; background:rgba(255,255,255,.72);">
                       <div class="session-sub" style="font-weight:950;">${who} · ${when}</div>
                       <div class="session-sub" style="color:rgba(15,23,42,.6);">${gradedInfo}</div>
+                      ${savedDisplay}
                       <div class="session-sub" style="white-space:pre-wrap;">${txt || "(내용 없음)"}</div>
                       ${fileRow}
                       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px;">
                         <label style="font-size:12px; font-weight:950;">점수</label>
-                        <input type="number" min="0" max="100" step="1" value="${escapeAttr(scoreVal)}" data-grade-score="${escapeAttr(s.id)}" class="input" style="width:90px;">
+                        <input type="number" min="0" max="100" step="1" value="" placeholder="예: 100" data-grade-score="${escapeAttr(s.id)}" data-last-score="${escapeAttr(scoreVal)}" class="input" style="width:90px;">
                         <label style="font-size:12px; font-weight:950;">코멘트</label>
-                        <input type="text" value="${escapeAttr(feedbackVal)}" data-grade-feedback="${escapeAttr(s.id)}" class="input" style="flex:1; min-width:180px;">
-                        <button class="btn" type="button" data-grade-save="${escapeAttr(s.id)}" data-grade-assign="${escapeAttr(a.id)}">저장</button>
+                        <input type="text" value="" placeholder="피드백 입력" data-grade-feedback="${escapeAttr(s.id)}" data-last-feedback="${escapeAttr(feedbackVal)}" class="input" style="flex:1; min-width:180px;">
+                        <button class="btn" type="button" data-grade-fill="${escapeAttr(s.id)}">불러오기</button>
+                        <button class="btn primary" type="button" data-grade-save="${escapeAttr(s.id)}" data-grade-assign="${escapeAttr(a.id)}">저장</button>
                       </div>
                     </div>
                   `;
@@ -2744,6 +2765,16 @@ async function loadClassDetailPage() {
     attachSubmissionFileFetchHandlers();
 
     if (isOwnerTeacher) {
+      $$("[data-grade-fill]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const subId = btn.getAttribute("data-grade-fill");
+          const scoreInput = document.querySelector(`[data-grade-score="${CSS.escape(subId)}"]`);
+          const fbInput = document.querySelector(`[data-grade-feedback="${CSS.escape(subId)}"]`);
+          if (scoreInput) scoreInput.value = scoreInput.getAttribute("data-last-score") || "";
+          if (fbInput) fbInput.value = fbInput.getAttribute("data-last-feedback") || "";
+        });
+      });
+
       $$("[data-grade-save]").forEach(btn => {
         btn.addEventListener("click", async () => {
           // 클릭 시 폼 submit 방지
@@ -2797,6 +2828,17 @@ async function loadClassDetailPage() {
             }
             renderAssignments();
             showToast("채점이 저장됐어요.", "success");
+            // 입력값 초기화
+            const scoreInput = document.querySelector(`[data-grade-score="${CSS.escape(subId)}"]`);
+            const fbInput = document.querySelector(`[data-grade-feedback="${CSS.escape(subId)}"]`);
+            if (scoreInput) {
+              scoreInput.setAttribute("data-last-score", scorePayload === null ? "" : String(scorePayload));
+              scoreInput.value = "";
+            }
+            if (fbInput) {
+              fbInput.setAttribute("data-last-feedback", feedbackVal || "");
+              fbInput.value = "";
+            }
           } catch (e) {
             console.error(e);
             alert("채점 저장 실패\n" + (e?.message || ""));
@@ -2821,27 +2863,28 @@ async function loadClassDetailPage() {
 
   // 첨부 파일 on-demand fetch (teacher view에서 fileUrl 제거했으므로 필요)
   function attachSubmissionFileFetchHandlers() {
-    $$("[data-fetch-file]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const subId = btn.getAttribute("data-fetch-file");
-        const fname = btn.getAttribute("data-file-name") || "첨부파일";
+    $$("[data-fetch-file]").forEach(link => {
+      const handler = async (e) => {
+        e.preventDefault();
+        const subId = link.getAttribute("data-fetch-file");
+        const fname = link.getAttribute("data-file-name") || "첨부파일";
         try {
-          btn.disabled = true;
-          btn.textContent = "불러오는 중...";
+          link.classList.add("is-loading");
+          link.textContent = "불러오는 중...";
           const res = await apiGet(`/api/submissions/${encodeURIComponent(subId)}/file`, { silent: true });
           const url = res?.fileUrl;
           const name = res?.fileName || fname;
           if (!url) throw new Error("첨부가 없습니다.");
-          // data URL이면 파일명 주입
           const finalUrl = url.startsWith("data:") ? encodeDataUrlWithName(url, name) : url;
           await forceDownload(finalUrl, name);
         } catch (e) {
           alert("첨부를 불러오지 못했습니다.\n" + (e?.message || ""));
         } finally {
-          btn.disabled = false;
-          btn.textContent = "첨부 열기";
+          link.classList.remove("is-loading");
+          link.textContent = fname;
         }
-      }, { once: true });
+      };
+      link.addEventListener("click", handler, { once: true });
     });
   }
 
