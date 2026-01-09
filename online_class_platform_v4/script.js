@@ -1722,39 +1722,51 @@ async function loadClassDetailPage() {
   }
 
   // 원격 데이터는 백그라운드로 불러와서 UI를 즉시 렌더
-  (async () => {
+  const detailLoadCache = { mats: false, assigns: false, revs: false, qnas: false };
+  async function fetchMaterialsData() {
+    if (detailLoadCache.mats) return;
+    detailLoadCache.mats = true;
     try {
-      const [mats, assigns, revs, qnas] = await Promise.all([
-        apiGet(`/api/classes/${encodeURIComponent(id)}/materials`, { silent: true }).catch(() => []),
-        apiGet(`/api/classes/${encodeURIComponent(id)}/assignments`, { silent: true }).catch(() => []),
-        apiGet(`/api/classes/${encodeURIComponent(id)}/reviews`, { silent: true }).catch(() => []),
-        apiGet(`/api/classes/${encodeURIComponent(id)}/qna`, { silent: true }).catch(() => []),
-      ]);
-      const matsMap = getMaterials();
-      matsMap[id] = mats || [];
-      setMaterials(matsMap);
-
-      const assignMap = getAssignments();
-      assignMap[id] = assigns || [];
-      setAssignments(assignMap);
-
-      const revMap = getReviews();
-      revMap[id] = revs || [];
-      setReviews(revMap);
-
-      const qMap = getQna();
-      qMap[id] = qnas || [];
-      setQna(qMap);
-
-      // 데이터 도착 시 섹션만 부분 갱신
-      renderAssignments();
-      renderReviews();
+      const mats = await apiGet(`/api/classes/${encodeURIComponent(id)}/materials`, { silent: true }).catch(() => []);
+      const map = getMaterials();
+      map[id] = mats || [];
+      setMaterials(map);
       renderMaterials();
+    } catch (e) { console.error("materials fetch failed", e); }
+  }
+  async function fetchAssignmentsData() {
+    if (detailLoadCache.assigns) return;
+    detailLoadCache.assigns = true;
+    try {
+      const assigns = await apiGet(`/api/classes/${encodeURIComponent(id)}/assignments`, { silent: true }).catch(() => []);
+      const map = getAssignments();
+      map[id] = assigns || [];
+      setAssignments(map);
+      renderAssignments();
+    } catch (e) { console.error("assignments fetch failed", e); }
+  }
+  async function fetchReviewsData() {
+    if (detailLoadCache.revs) return;
+    detailLoadCache.revs = true;
+    try {
+      const revs = await apiGet(`/api/classes/${encodeURIComponent(id)}/reviews`, { silent: true }).catch(() => []);
+      const map = getReviews();
+      map[id] = revs || [];
+      setReviews(map);
+      renderReviews();
+    } catch (e) { console.error("reviews fetch failed", e); }
+  }
+  async function fetchQnaData() {
+    if (detailLoadCache.qnas) return;
+    detailLoadCache.qnas = true;
+    try {
+      const qnas = await apiGet(`/api/classes/${encodeURIComponent(id)}/qna`, { silent: true }).catch(() => []);
+      const map = getQna();
+      map[id] = qnas || [];
+      setQna(map);
       renderQna();
-    } catch (e) {
-      console.error("class detail data fetch failed", e);
-    }
-  })();
+    } catch (e) { console.error("qna fetch failed", e); }
+  }
 
   $("#detailImg").src = c.thumb || FALLBACK_THUMB;
   $("#detailTitle").textContent = c.title || "-";
@@ -1773,6 +1785,11 @@ async function loadClassDetailPage() {
 
   const enrollStateText = $("#enrollStateText");
   const teacherHint = $("#teacherHint");
+
+  // 기본 탭: 지난 수업만 즉시 렌더, 나머지 섹션은 탭 클릭 시 로드
+  fetchMaterialsData(); // 자료실 선호 시 바로 부르는 경우에 대비해 일단 선행 로드
+  fetchAssignmentsData(); // 과제 탭 진입 시 느림 방지
+  // 리뷰/Q&A는 클릭 시 로드 (상단 함수 내부 캐시로 1회만 호출)
 
   // ? buy button id가 다를 수도 있으니 강제로 찾아줌
   function getBuyButton() {
