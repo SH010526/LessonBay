@@ -533,6 +533,71 @@ function getPath() {
 }
 function getParam(name) { return new URLSearchParams(location.search).get(name); }
 const LAST_CLASS_KEY = "lessonbay:lastClassId";
+const CLASS_CACHE_KEY = "lessonbay:classCacheV1";
+const PREFETCH_CLASS_KEY = "lessonbay:prefetchClassV1";
+const CACHE_TTL_MS = 1000 * 60 * 10; // 10분 캐시
+
+function sleep(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function slimClassForCache(c) {
+  if (!c || typeof c !== "object") return null;
+  const id = c.id || c.classId;
+  if (!id) return null;
+  return {
+    id,
+    title: c.title || "",
+    teacher: c.teacher?.name || c.teacher || c.teacherName || "",
+    teacherId: c.teacherId || c.teacher?.id || "",
+    category: c.category || "",
+    description: c.description || "",
+    weeklyPrice: c.weeklyPrice ?? null,
+    monthlyPrice: c.monthlyPrice ?? null,
+    thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+  };
+}
+
+function cacheClassList(list) {
+  const slim = (Array.isArray(list) ? list : []).map(slimClassForCache).filter(Boolean);
+  try { sessionStorage.setItem(CLASS_CACHE_KEY, JSON.stringify({ at: Date.now(), list: slim })); } catch (_) {}
+}
+
+function loadCachedClasses() {
+  try {
+    const raw = sessionStorage.getItem(CLASS_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = safeParse(raw, null);
+    if (!parsed?.list || !Array.isArray(parsed.list)) return [];
+    if (parsed.at && Date.now() - parsed.at > CACHE_TTL_MS) return [];
+    return parsed.list;
+  } catch (_) {
+    return [];
+  }
+}
+
+function cachePrefetchClass(cls) {
+  const slim = slimClassForCache(cls);
+  if (!slim) return;
+  try { sessionStorage.setItem(PREFETCH_CLASS_KEY, JSON.stringify({ at: Date.now(), cls: slim })); } catch (_) {}
+}
+
+function consumePrefetchClass(expectId) {
+  try {
+    const raw = sessionStorage.getItem(PREFETCH_CLASS_KEY);
+    if (!raw) return null;
+    const parsed = safeParse(raw, null);
+    if (!parsed?.cls) return null;
+    if (parsed.at && Date.now() - parsed.at > CACHE_TTL_MS) return null;
+    if (expectId && parsed.cls.id !== expectId) return null;
+    return parsed.cls;
+  } catch (_) {
+    return null;
+  } finally {
+    try { sessionStorage.removeItem(PREFETCH_CLASS_KEY); } catch (_) {}
+  }
+}
+
 function rememberClassId(id) {
   if (!id) return;
   try { sessionStorage.setItem(LAST_CLASS_KEY, String(id)); } catch (_) {}
@@ -557,6 +622,8 @@ function resolveClassIdFromUrl() {
 }
 function goClassDetail(id, hash = "") {
   if (!id) return;
+  const cls = getClasses().find(x => x.id === id);
+  if (cls) cachePrefetchClass(cls);
   rememberClassId(id);
   const suffix = hash ? (hash.startsWith("#") ? hash : `#${hash}`) : "";
   location.href = `class_detail.html?id=${encodeURIComponent(id)}${suffix}`;
@@ -639,7 +706,11 @@ function getUsers() { return []; }
 function setUsers(_list) { /* no-op */ }
 
 function getClasses() { return dataCache.classes; }
-function setClasses(list) { dataCache.classes = Array.isArray(list) ? list : []; }
+function setClasses(list) {
+  const arr = Array.isArray(list) ? list : [];
+  dataCache.classes = arr;
+  cacheClassList(arr);
+}
 
 // ===== Enrollment storage: keep as OBJECT-MAP (userKey -> classId -> record) =====
 function convertEnrollmentArrayToMap(arr) {
@@ -871,12 +942,16 @@ async function loadLocalSampleClasses() {
 }
 
 async function ensureSeedData() {
-  // Supabase 세션 동기화
-  await syncLocalUserFromSupabaseSession();
-  const user = getUser();
+  const sessionPromise = syncLocalUserFromSupabaseSession().catch(() => {});
+  await Promise.race([sessionPromise, sleep(1200)]);
 
-  // 빠른 초기 렌더: 로컬 샘플/빈 수강정보 먼저 채우고, 원격은 백그라운드로 갱신
-  setClasses(await loadLocalSampleClasses());
+  const cached = loadCachedClasses();
+  if (cached.length) {
+    setClasses(cached);
+  } else {
+    setClasses(await loadLocalSampleClasses());
+  }
+  const user = getUser();
   setEnrollments(user ? {} : {});
 
   const rerenderVisible = () => {
@@ -886,6 +961,10 @@ async function ensureSeedData() {
     if ($("#teacherDash")) loadTeacherDashboard();
     if ($("#studentDash")) loadStudentDashboard();
   };
+
+  // 초기 데이터로 한 번 갱신
+  rerenderVisible();
+  updateNav();
 
   // 원격 수업 목록
   (async () => {
@@ -919,8 +998,22 @@ async function ensureSeedData() {
     setEnrollments({});
   }
 
-  // 세션 동기화 후 내비게이션 갱신
-  updateNav();
+  // 세션 동기화 완료 후 내비/페이지 재반영
+  sessionPromise.then(async () => {
+    try {
+      const u = getUser();
+      if (u) {
+        try {
+          const enrollList = await apiGet("/api/me/enrollments", { silent: true });
+          setEnrollments(enrollList || []);
+        } catch (e) {
+          console.error("enrollments fetch failed (late)", e);
+        }
+      }
+      rerenderVisible();
+      updateNav();
+    } catch (_) {}
+  });
 }
 
 // ---------------------------
@@ -1682,6 +1775,17 @@ async function loadClassDetailPage() {
 
   const classes = getClasses();
   let c = classes.find(x => x.id === id);
+
+  // 직전 페이지에서 넘겨둔 프리페치 데이터 활용
+  if (!c) {
+    const prefetched = consumePrefetchClass(id);
+    if (prefetched) {
+      c = prefetched;
+      const merged = [...classes.filter(x => x.id !== prefetched.id), prefetched];
+      setClasses(merged);
+    }
+  }
+
   const user = getUser();
 
   // 단독 접속 시 목록이 비어 있어도 상세 조회는 가능하도록 API에서 재시도
@@ -1723,6 +1827,7 @@ async function loadClassDetailPage() {
 
   // 원격 데이터는 백그라운드로 불러와서 UI를 즉시 렌더
   const detailLoadCache = { mats: false, assigns: false, revs: false, qnas: false };
+  let protectedLoaded = false;
   async function fetchMaterialsData() {
     if (detailLoadCache.mats) return;
     detailLoadCache.mats = true;
@@ -1785,11 +1890,6 @@ async function loadClassDetailPage() {
 
   const enrollStateText = $("#enrollStateText");
   const teacherHint = $("#teacherHint");
-
-  // 기본 탭: 지난 수업만 즉시 렌더, 나머지 섹션은 탭 클릭 시 로드
-  fetchMaterialsData(); // 자료실 선호 시 바로 부르는 경우에 대비해 일단 선행 로드
-  fetchAssignmentsData(); // 과제 탭 진입 시 느림 방지
-  // 리뷰/Q&A는 클릭 시 로드 (상단 함수 내부 캐시로 1회만 호출)
 
   // ? buy button id가 다를 수도 있으니 강제로 찾아줌
   function getBuyButton() {
@@ -1861,6 +1961,19 @@ async function loadClassDetailPage() {
     }
 
     return { state: "unknown", e: null, active: false, endText: "-" };
+  }
+
+  function ensureProtectedData() {
+    if (protectedLoaded) return;
+    const status = getEnrollStatusForUI(getUser());
+    const allowed = status.state === "owner_teacher" || status.state === "student_active";
+    if (!allowed) return;
+    protectedLoaded = true;
+    fetchMaterialsData();
+    fetchAssignmentsData();
+    fetchReviewsData();
+    fetchQnaData();
+    renderReplaysList(c.id);
   }
 
   function refreshGates() {
@@ -1952,6 +2065,7 @@ async function loadClassDetailPage() {
     }
 
     const canWatch = (status.state === "owner_teacher") || (status.state === "student_active");
+    if (canWatch) ensureProtectedData();
     refreshReplayButtons(canWatch);
   }
 
@@ -2037,11 +2151,9 @@ async function loadClassDetailPage() {
 
     refreshGates();
     bindEnterClicks();
-    renderReplaysList(c.id);
+    ensureProtectedData();
     refreshGates();
   });
-
-  renderReplaysList(c.id);
 
   // ---------------------------
   // 자료실 / 과제 / 리뷰 / Q&A 렌더링
@@ -2588,42 +2700,61 @@ async function loadClassDetailPage() {
           const asgId = btn.getAttribute("data-grade-assign");
           const scoreInput = document.querySelector(`[data-grade-score="${CSS.escape(subId)}"]`);
           const fbInput = document.querySelector(`[data-grade-feedback="${CSS.escape(subId)}"]`);
-          const scoreVal = scoreInput?.value;
+          const scoreRaw = scoreInput?.value;
           const feedbackVal = fbInput?.value || "";
           const originalText = btn.textContent;
-          // 낙관적 업데이트: 즉시 화면에 반영
-          const amap = getAssignments();
-          const list = amap[c.id] || [];
-          const patched = list.map(a => {
-            if (a.id !== asgId) return a;
-            return {
-              ...a,
-              submissions: (a.submissions || []).map(s => s.id === subId ? { ...s, score: scoreVal === "" ? null : Number(scoreVal), feedback: feedbackVal } : s)
-            };
-          });
-          amap[c.id] = patched;
-          setAssignments(amap);
-          renderAssignments();
-          // 첨부 on-demand 핸들러 재바인드
-          attachSubmissionFileFetchHandlers();
+          const prevDisabled = btn.disabled;
+          const scorePayload = (scoreRaw === "" || scoreRaw === null || scoreRaw === undefined)
+            ? null
+            : (Number.isFinite(Number(scoreRaw)) ? Number(scoreRaw) : null);
+
+          const patchLocalGrade = () => {
+            const amap = getAssignments();
+            const list = amap[c.id] || [];
+            const patched = list.map(a => {
+              if (a.id !== asgId) return a;
+              return {
+                ...a,
+                submissions: (a.submissions || []).map(s => s.id === subId ? { ...s, score: scorePayload, feedback: feedbackVal } : s)
+              };
+            });
+            amap[c.id] = patched;
+            setAssignments(amap);
+          };
           try {
             btn.disabled = true;
             btn.textContent = "저장중...";
             await apiPost(`/api/assignments/${encodeURIComponent(asgId)}/submissions/${encodeURIComponent(subId)}/grade`, {
-              score: scoreVal === "" ? null : Number(scoreVal),
+              score: scorePayload,
               feedback: feedbackVal,
             });
+            let refreshed = null;
+            try {
+              refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`, { silent: true }).catch(() => null);
+            } catch (_) {
+              refreshed = null;
+            }
+            if (Array.isArray(refreshed)) {
+              const amap = getAssignments();
+              amap[c.id] = refreshed || [];
+              setAssignments(amap);
+            } else {
+              patchLocalGrade();
+            }
+            renderAssignments();
+            showToast("채점이 저장됐어요.", "success");
           } catch (e) {
             console.error(e);
             alert("채점 저장 실패\n" + (e?.message || ""));
-            // 실패 시 낙관적 업데이트 롤백
-            const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`, { silent: true }).catch(() => []);
-            const amap = getAssignments();
-            amap[c.id] = refreshed || [];
-            setAssignments(amap);
-            renderAssignments();
+            const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`, { silent: true }).catch(() => null);
+            if (Array.isArray(refreshed)) {
+              const amap = getAssignments();
+              amap[c.id] = refreshed || [];
+              setAssignments(amap);
+              renderAssignments();
+            }
           } finally {
-            btn.disabled = false;
+            btn.disabled = prevDisabled;
             btn.textContent = originalText || "저장";
           }
         });
@@ -2918,6 +3049,11 @@ async function renderReplaysList(classId) {
   const isOwnerTeacher = user?.role === "teacher" && ((user.id && cls?.teacherId && user.id === cls.teacherId) || user?.name === cls?.teacher);
   const activeStudent = user?.role === "student" && isEnrollmentActiveForUser(user, classId);
   const canWatch = isOwnerTeacher || activeStudent;
+
+  if (!user || !canWatch) {
+    wrap.innerHTML = `<div class="muted" style="padding:10px 2px;">로그인 후 수강(또는 선생님) 상태에서 다시보기를 볼 수 있습니다.</div>`;
+    return;
+  }
 
   wrap.innerHTML = `<div class="muted" style="padding:10px 2px;">지난 수업 불러오는 중...</div>`;
 
