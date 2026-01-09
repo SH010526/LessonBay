@@ -266,8 +266,12 @@ async function uploadToSupabaseStorage(file, prefix = "uploads") {
 
 function buildPublicStorageUrl(path) {
   if (!path || isHttpLike(path) || path.startsWith("data:")) return path || null;
+  // 이미 public URL이면 그대로 사용
+  if (path.includes("/storage/v1/object/public/")) return path;
   const clean = path.replace(/^\/+/, "");
-  return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${clean}`;
+  // path가 이미 버킷으로 시작하면 중복을 피한다
+  const withBucket = clean.startsWith(`${STORAGE_BUCKET}/`) ? clean : `${STORAGE_BUCKET}/${clean}`;
+  return `${SUPABASE_URL}/storage/v1/object/public/${withBucket}`;
 }
 
 async function resolveStorageUrl(urlOrPath) {
@@ -2023,21 +2027,21 @@ async function loadClassDetailPage() {
     return { state: "unknown", e: null, active: false, endText: "-" };
   }
 
-  function ensureProtectedData() {
-    if (protectedLoaded) return;
-    const status = getEnrollStatusForUI(getUser());
-    const allowed = status.state === "owner_teacher" || status.state === "student_active";
-    if (!allowed) return;
-    protectedLoaded = true;
-    // 현재 탭 우선, 나머지는 탭 클릭 시 로드
-    const activeTab = $("#detailTabNav .pill.active")?.getAttribute("data-tab");
-    if (activeTab === "materials") fetchMaterialsData();
-    if (activeTab === "assignments") fetchAssignmentsData();
-    if (activeTab === "reviews") fetchReviewsData();
-    if (activeTab === "qna") fetchQnaData();
-    // 지난 수업은 바로 보여줘야 하므로 로드
-    renderReplaysList(c.id);
-  }
+function ensureProtectedData() {
+  if (protectedLoaded) return;
+  const status = getEnrollStatusForUI(getUser());
+  const allowed = status.state === "owner_teacher" || status.state === "student_active";
+  if (!allowed) return;
+  protectedLoaded = true;
+  // 현재 탭 우선, 나머지는 탭 클릭 시 로드
+  const activeTab = $("#detailTabNav .pill.active")?.getAttribute("data-tab");
+  if (activeTab === "materials") fetchMaterialsData();
+  if (activeTab === "assignments") fetchAssignmentsData();
+  if (activeTab === "reviews") fetchReviewsData();
+  if (activeTab === "qna") fetchQnaData();
+  // 지난 수업은 바로 보여줘야 하므로 로드
+  renderReplaysList(c.id);
+}
 
   function refreshGates() {
     const user = getUser();
@@ -2176,10 +2180,6 @@ async function loadClassDetailPage() {
   refreshGates();
   bindEnterClicks();
   ensureProtectedData();
-  setTimeout(() => ensureProtectedData(), 1500); // 세션 동기화 지연 대비 재시도
-  if (getEnrollStatusForUI(getUser()).state === "owner_teacher") {
-    fetchAssignmentsData();
-  }
 
   buyBtn?.addEventListener("click", async () => {
     const user = getUser();
@@ -2727,7 +2727,7 @@ async function loadClassDetailPage() {
                   const who = escapeHtml(s.student?.name || s.studentName || s.studentEmail || s.studentId || "학생");
                   const txt = escapeHtml(s.content || s.text || "");
                   const fUrl = s.fileUrl || s.fileData || "";
-                  const fName = s.fileName || inferFileName(fUrl);
+                  const fName = s.fileName || inferFileName(fUrl) || "첨부 파일";
                   const fileRow = (fUrl || s.hasFile) ? `<div class="session-sub" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                       <span class="chip secondary" style="padding:4px 8px;">첨부</span>
                       ${fUrl
