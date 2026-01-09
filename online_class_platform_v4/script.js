@@ -2572,6 +2572,19 @@ async function loadClassDetailPage() {
           const scoreVal = scoreInput?.value;
           const feedbackVal = fbInput?.value || "";
           const originalText = btn.textContent;
+          // 낙관적 업데이트: 즉시 화면에 반영
+          const amap = getAssignments();
+          const list = amap[c.id] || [];
+          const patched = list.map(a => {
+            if (a.id !== asgId) return a;
+            return {
+              ...a,
+              submissions: (a.submissions || []).map(s => s.id === subId ? { ...s, score: scoreVal === "" ? null : Number(scoreVal), feedback: feedbackVal } : s)
+            };
+          });
+          amap[c.id] = patched;
+          setAssignments(amap);
+          renderAssignments();
           try {
             btn.disabled = true;
             btn.textContent = "저장중...";
@@ -2588,6 +2601,12 @@ async function loadClassDetailPage() {
           } catch (e) {
             console.error(e);
             alert("채점 저장 실패\n" + (e?.message || ""));
+            // 실패 시 낙관적 업데이트 롤백
+            const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`, { silent: true }).catch(() => []);
+            const amap = getAssignments();
+            amap[c.id] = refreshed || [];
+            setAssignments(amap);
+            renderAssignments();
           } finally {
             btn.disabled = false;
             btn.textContent = originalText || "저장";
