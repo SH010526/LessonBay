@@ -872,10 +872,22 @@ app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
         }
       : { include: { submissions: { where: { studentId: req.user.id } } } };
 
-    const list = await prisma.assignment.findMany({
+    const listRaw = await prisma.assignment.findMany({
       where: { classId },
       orderBy: { createdAt: "desc" },
       ...includeSubs,
+    });
+    // 교사/관리자는 대용량 fileUrl을 제거하고 hasFile 플래그만 전달
+    const list = listRaw.map(a => {
+      if (!access.isTeacher) return a;
+      return {
+        ...a,
+        submissions: (a.submissions || []).map(s => ({
+          ...s,
+          hasFile: !!s.fileUrl,
+          fileUrl: undefined,
+        })),
+      };
     });
     res.json(list);
   } catch (err) {
@@ -1027,6 +1039,40 @@ app.post("/api/assignments/:assignmentId/submissions/:submissionId/grade", requi
   } catch (err) {
     console.error("Assignment grade error:", err);
     res.status(500).json({ error: "과제 채점 실패", detail: err?.message || String(err) });
+  }
+});
+
+// Submission file fetch (on-demand)
+app.get("/api/submissions/:id/file", requireAuth, async (req, res) => {
+  try {
+    const sub = await prisma.assignmentSubmission.findUnique({
+      where: { id: req.params.id },
+      include: {
+        assignment: {
+          select: {
+            classId: true,
+            class: { select: { teacherId: true, teacher: { select: { id: true, name: true } } } },
+          },
+        },
+      },
+    });
+    if (!sub) return res.status(404).json({ error: "제출을 찾을 수 없습니다." });
+
+    const access = await ensureClassAccess(req, sub.assignment.classId);
+    if (access.error) return res.status(404).json({ error: access.error });
+
+    const isOwner = sub.studentId === req.user.id;
+    const teacherId = sub.assignment.class?.teacherId || sub.assignment.class?.teacher?.id || "";
+    const teacherName = sub.assignment.class?.teacher?.name || "";
+    const isTeacher = access.isTeacher || teacherId === req.user.id || (!!teacherName && teacherName === req.user.name);
+    if (!(isOwner || isTeacher || access.isAdmin)) {
+      return res.status(403).json({ error: "조회 권한이 없습니다." });
+    }
+
+    res.json({ fileUrl: sub.fileUrl || null, fileName: sub.fileName || null });
+  } catch (err) {
+    console.error("Submission file fetch error:", err);
+    res.status(500).json({ error: "첨부 조회 실패", detail: err?.message || String(err) });
   }
 });
 

@@ -2531,9 +2531,9 @@ async function loadClassDetailPage() {
                   const txt = escapeHtml(s.content || s.text || "");
                   const fUrl = s.fileUrl || s.fileData || "";
                   const fName = s.fileName || inferFileName(fUrl);
-                  const fileRow = fUrl ? `<div class="session-sub" style="display:flex; gap:8px; align-items:center;">
+                  const fileRow = (fUrl || s.hasFile) ? `<div class="session-sub" style="display:flex; gap:8px; align-items:center;">
                       <span class="chip secondary" style="padding:4px 8px;">첨부</span>
-                      <a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>
+                      ${fUrl ? `<a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>` : `<button class="btn" type="button" data-fetch-file="${escapeAttr(s.id)}" data-file-name="${escapeAttr(fName)}">첨부 열기</button>`}
                     </div>` : "";
                   const scoreVal = (s.score ?? "") === "" || s.score === null ? "" : s.score;
                   const feedbackVal = s.feedback || "";
@@ -2560,6 +2560,8 @@ async function loadClassDetailPage() {
       }).join("")
       : `<div class="muted" style="font-size:13px;">등록된 과제가 없습니다.</div>`;
 
+    attachSubmissionFileFetchHandlers();
+
     if (isOwnerTeacher) {
       $$("[data-grade-save]").forEach(btn => {
         btn.addEventListener("click", async () => {
@@ -2585,6 +2587,8 @@ async function loadClassDetailPage() {
           amap[c.id] = patched;
           setAssignments(amap);
           renderAssignments();
+          // 첨부 on-demand 핸들러 재바인드
+          attachSubmissionFileFetchHandlers();
           try {
             btn.disabled = true;
             btn.textContent = "저장중...";
@@ -2592,11 +2596,6 @@ async function loadClassDetailPage() {
               score: scoreVal === "" ? null : Number(scoreVal),
               feedback: feedbackVal,
             });
-            const refreshed = await apiGet(`/api/classes/${encodeURIComponent(c.id)}/assignments`, { silent: true }).catch(() => []);
-            const amap = getAssignments();
-            amap[c.id] = refreshed || [];
-            setAssignments(amap);
-            renderAssignments();
             showToast("채점이 저장되었습니다.", "success");
           } catch (e) {
             console.error(e);
@@ -2614,6 +2613,30 @@ async function loadClassDetailPage() {
         });
       });
     }
+  }
+
+  // 첨부 파일 on-demand fetch (teacher view에서 fileUrl 제거했으므로 필요)
+  function attachSubmissionFileFetchHandlers() {
+    $$("[data-fetch-file]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const subId = btn.getAttribute("data-fetch-file");
+        const fname = btn.getAttribute("data-file-name") || "첨부파일";
+        try {
+          btn.disabled = true;
+          btn.textContent = "불러오는 중...";
+          const res = await apiGet(`/api/submissions/${encodeURIComponent(subId)}/file`, { silent: true });
+          const url = res?.fileUrl;
+          const name = res?.fileName || fname;
+          if (!url) throw new Error("첨부가 없습니다.");
+          await forceDownload(url, name);
+        } catch (e) {
+          alert("첨부를 불러오지 못했습니다.\n" + (e?.message || ""));
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "첨부 열기";
+        }
+      }, { once: true });
+    });
   }
 
   function renderReviews() {
