@@ -1013,10 +1013,24 @@ app.post("/api/assignments/:assignmentId/submissions/:submissionId/grade", requi
 
     const assignment = await prisma.assignment.findUnique({
       where: { id: assignmentId },
-      include: { class: { select: { teacherId: true } } },
+      include: {
+        class: {
+          select: {
+            teacherId: true,
+            title: true,
+            category: true,
+            teacher: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
     });
     if (!assignment) return res.status(404).json({ error: "과제를 찾을 수 없습니다." });
-    const isOwner = assignment.class.teacherId === req.user.id || req.user.role === "admin";
+    const teacherId = assignment.class.teacherId || assignment.class.teacher?.id || "";
+    const teacherName = assignment.class.teacher?.name || "";
+    const isOwner =
+      req.user.role === "admin" ||
+      (teacherId && teacherId === req.user.id) ||
+      (!teacherId && teacherName && teacherName === req.user.name);
     if (!isOwner) return res.status(403).json({ error: "본인 수업의 과제만 채점할 수 있습니다." });
 
     const updated = await prisma.assignmentSubmission.update({
