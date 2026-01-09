@@ -102,6 +102,22 @@ app.use(morgan("combined", { stream: accessLogStream }));
 const PORT = process.env.PORT || 3000;
 const kickedMap = new Map(); // classId -> Map<userId, expiresAt>
 
+function inferFileNameFromUrl(url) {
+  if (!url) return "";
+  try {
+    if (String(url).startsWith("data:")) {
+      const nameMatch = String(url).match(/;name=([^;]+);base64,/);
+      if (nameMatch && nameMatch[1]) return decodeURIComponent(nameMatch[1]);
+      return "첨부파일";
+    }
+    const u = new URL(String(url));
+    const path = u.pathname.split("/").pop() || "";
+    return path ? decodeURIComponent(path.split("?")[0]) : "";
+  } catch (_) {
+    return "";
+  }
+}
+
 // OTP store (in-memory)
 const otpStore = new Map();
 
@@ -885,6 +901,7 @@ app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
         submissions: (a.submissions || []).map(s => ({
           ...s,
           hasFile: !!s.fileUrl,
+          fileName: inferFileNameFromUrl(s.fileUrl || ""),
           fileUrl: undefined,
         })),
       };
@@ -1076,7 +1093,7 @@ app.get("/api/submissions/:id/file", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "조회 권한이 없습니다." });
     }
 
-    res.json({ fileUrl: sub.fileUrl || null, fileName: sub.fileName || null });
+    res.json({ fileUrl: sub.fileUrl || null, fileName: sub.fileName || inferFileNameFromUrl(sub.fileUrl || "") || null });
   } catch (err) {
     console.error("Submission file fetch error:", err);
     res.status(500).json({ error: "첨부 조회 실패", detail: err?.message || String(err) });

@@ -274,9 +274,27 @@ function buildPublicStorageUrl(path) {
   return `${SUPABASE_URL}/storage/v1/object/public/${withBucket}`;
 }
 
+function extractStoragePath(urlStr) {
+  if (!urlStr || !isHttpLike(urlStr)) return "";
+  try {
+    const u = new URL(urlStr);
+    if (!u.hostname.includes("supabase.co")) return "";
+    const m = u.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
+    if (!m) return "";
+    return `${m[1]}/${m[2]}`;
+  } catch (_) {
+    return "";
+  }
+}
+
 async function resolveStorageUrl(urlOrPath) {
   ensureSupabaseClient();
-  if (!urlOrPath || /^https?:\/\//i.test(urlOrPath) || urlOrPath.startsWith("data:")) return urlOrPath;
+  if (!urlOrPath || urlOrPath.startsWith("data:")) return urlOrPath;
+  if (isHttpLike(urlOrPath)) {
+    const extracted = extractStoragePath(urlOrPath);
+    if (!extracted) return urlOrPath;
+    urlOrPath = extracted;
+  }
   if (!supabaseClient) return buildPublicStorageUrl(urlOrPath);
   const { data, error } = await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(urlOrPath, 60 * 60 * 24);
   if (error) return buildPublicStorageUrl(urlOrPath);
@@ -557,6 +575,8 @@ function isHttpLike(u) {
 
 function initialThumbSrc(raw) {
   if (!raw) return FALLBACK_THUMB;
+  const extracted = extractStoragePath(raw);
+  if (extracted) return buildPublicStorageUrl(extracted) || FALLBACK_THUMB;
   if (isHttpLike(raw) || raw.startsWith("data:")) return raw;
   return buildPublicStorageUrl(raw) || FALLBACK_THUMB;
 }
@@ -1003,8 +1023,10 @@ async function ensureSeedData() {
   const cached = loadCachedClasses();
   if (cached.length) {
     setClasses(cached);
-  } else {
+  } else if (!detailOnly) {
     setClasses(await loadLocalSampleClasses());
+  } else {
+    setClasses([]);
   }
   const user = getUser();
   setEnrollments(user ? {} : {});
@@ -1841,6 +1863,8 @@ async function loadClassDetailPage() {
 
   const classes = getClasses();
   let c = classes.find(x => x.id === id);
+  const user = getUser();
+  let needsRemote = false;
 
   // 직전 페이지에서 넘겨둔 프리페치 데이터 활용
   if (!c) {
@@ -1852,43 +1876,60 @@ async function loadClassDetailPage() {
     }
   }
 
-  const user = getUser();
+  if (!c) {
+    needsRemote = true;
+    c = {
+      id,
+      title: "불러오는 중...",
+      teacher: "-",
+      teacherId: "",
+      category: "-",
+      description: "",
+      weeklyPrice: 0,
+      monthlyPrice: 0,
+      thumb: FALLBACK_THUMB,
+    };
+  }
 
-  // 단독 접속 시 목록이 비어 있어도 상세 조회는 가능하도록 API에서 재시도
-  if (!c && id) {
-    try {
-      const remote = await apiGet(`/api/classes/${encodeURIComponent(id)}`);
-      if (remote) {
-        c = {
+  const applyDetail = () => {
+    $("#detailImg").src = initialThumbSrc(c.thumb);
+    $("#detailImg").setAttribute("data-thumb", c.thumb || "");
+    $("#detailImg").setAttribute("loading", "lazy");
+    hydrateThumbs(root);
+
+    $("#detailTitle").textContent = c.title || "-";
+    $("#detailTeacher").textContent = c.teacher || "-";
+    $("#detailCategory").textContent = c.category || "-";
+    $("#detailDesc").textContent = c.description || "";
+    $("#detailWeekly").textContent = won(c.weeklyPrice);
+    $("#detailMonthly").textContent = won(c.monthlyPrice);
+  };
+
+  applyDetail();
+
+  if (needsRemote && id) {
+    (async () => {
+      try {
+        const remote = await apiGet(`/api/classes/${encodeURIComponent(id)}`, { silent: true });
+        if (!remote) throw new Error("empty response");
+        const normalized = {
           ...remote,
           teacher: remote.teacher?.name || remote.teacherName || remote.teacher || "-",
           teacherId: remote.teacherId || remote.teacher?.id || "",
           thumb: remote.thumbUrl || remote.thumb || FALLBACK_THUMB,
         };
-        const next = [...classes.filter(x => x.id !== c.id), c];
+        Object.assign(c, normalized);
+        const next = [...classes.filter(x => x.id !== c.id), normalized];
         setClasses(next);
+        applyDetail();
+        calc();
+        refreshGates();
+        ensureProtectedData();
+      } catch (e) {
+        console.error("class detail fetch failed", e);
+        showToast("수업 정보를 불러오지 못했어요.", "warn");
       }
-    } catch (e) {
-      console.error("class detail fetch failed", e);
-    }
-  }
-
-  // API/캐시 모두 없으면 로컬 샘플에서라도 찾아본다
-  if (!c && id) {
-    const fallback = await loadLocalSampleClasses();
-    const found = fallback.find(x => x.id === id);
-    if (found) {
-      const merged = [...classes.filter(x => x.id !== found.id), found];
-      setClasses(merged);
-      c = found;
-    }
-  }
-
-  if (!c) {
-    $("#detailTitle").textContent = "수업을 찾을 수 없습니다.";
-    showToast("수업 정보를 불러오지 못했어요. 수업 목록으로 이동합니다.", "warn");
-    setTimeout(() => { location.href = "classes.html"; }, 800);
-    return;
+    })();
   }
 
   // 원격 데이터는 백그라운드로 불러와서 UI를 즉시 렌더
@@ -1938,17 +1979,6 @@ async function loadClassDetailPage() {
       renderQna();
     } catch (e) { console.error("qna fetch failed", e); }
   }
-
-  $("#detailImg").src = initialThumbSrc(c.thumb);
-  $("#detailImg").setAttribute("data-thumb", c.thumb || "");
-  $("#detailImg").setAttribute("loading", "lazy");
-  hydrateThumbs(root);
-  $("#detailTitle").textContent = c.title || "-";
-  $("#detailTeacher").textContent = c.teacher || "-";
-  $("#detailCategory").textContent = c.category || "-";
-  $("#detailDesc").textContent = c.description || "";
-  $("#detailWeekly").textContent = won(c.weeklyPrice);
-  $("#detailMonthly").textContent = won(c.monthlyPrice);
 
   const planWeekly = $("#planWeekly");
   const planMonthly = $("#planMonthly");
@@ -3179,7 +3209,7 @@ async function renderReplaysList(classId) {
 
   async function loadReplays() {
     try {
-      const listRemote = await apiGet(`/api/classes/${encodeURIComponent(classId)}/replays`);
+      const listRemote = await apiGet(`/api/classes/${encodeURIComponent(classId)}/replays`, { silent: true });
       const rp = getReplays();
       rp[classId] = (listRemote || []).map((r) => ({
         ...r,
@@ -3444,7 +3474,7 @@ function handleCreateClassPage() {
           return;
         }
         const uploaded = await uploadToSupabaseStorage(thumbFile, "class-thumbs");
-        thumbUrlFinal = uploaded.signedUrl || uploaded.path || FALLBACK_THUMB;
+        thumbUrlFinal = uploaded.path || FALLBACK_THUMB;
       }
 
       await apiPost("/api/classes", {
