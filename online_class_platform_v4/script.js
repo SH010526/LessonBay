@@ -267,7 +267,7 @@ async function uploadToSupabaseStorage(file, prefix = "uploads") {
 function buildPublicStorageUrl(path) {
   if (!path || isHttpLike(path) || path.startsWith("data:")) return path || null;
   const clean = path.replace(/^\/+/, "");
-  return `${SUPABASE_URL}/storage/v1/object/public/${clean}`;
+  return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${clean}`;
 }
 
 async function resolveStorageUrl(urlOrPath) {
@@ -1809,6 +1809,11 @@ async function loadClassDetailPage() {
       pills.forEach(p => {
         p.classList.toggle("active", p.getAttribute("data-tab") === key);
       });
+      // 탭 클릭 시 필요한 데이터만 로드
+      if (key === "materials") fetchMaterialsData();
+      if (key === "assignments") fetchAssignmentsData();
+      if (key === "reviews") fetchReviewsData();
+      if (key === "qna") fetchQnaData();
     };
     pills.forEach(p => {
       p.addEventListener("click", () => show(p.getAttribute("data-tab")));
@@ -1926,7 +1931,7 @@ async function loadClassDetailPage() {
     } catch (e) { console.error("qna fetch failed", e); }
   }
 
-  $("#detailImg").src = c.thumb || FALLBACK_THUMB;
+  $("#detailImg").src = initialThumbSrc(c.thumb);
   $("#detailImg").setAttribute("data-thumb", c.thumb || "");
   hydrateThumbs(root);
   $("#detailTitle").textContent = c.title || "-";
@@ -2024,10 +2029,13 @@ async function loadClassDetailPage() {
     const allowed = status.state === "owner_teacher" || status.state === "student_active";
     if (!allowed) return;
     protectedLoaded = true;
-    fetchMaterialsData();
-    fetchAssignmentsData();
-    fetchReviewsData();
-    fetchQnaData();
+    // 현재 탭 우선, 나머지는 탭 클릭 시 로드
+    const activeTab = $("#detailTabNav .pill.active")?.getAttribute("data-tab");
+    if (activeTab === "materials") fetchMaterialsData();
+    if (activeTab === "assignments") fetchAssignmentsData();
+    if (activeTab === "reviews") fetchReviewsData();
+    if (activeTab === "qna") fetchQnaData();
+    // 지난 수업은 바로 보여줘야 하므로 로드
     renderReplaysList(c.id);
   }
 
@@ -2169,6 +2177,9 @@ async function loadClassDetailPage() {
   bindEnterClicks();
   ensureProtectedData();
   setTimeout(() => ensureProtectedData(), 1500); // 세션 동기화 지연 대비 재시도
+  if (getEnrollStatusForUI(getUser()).state === "owner_teacher") {
+    fetchAssignmentsData();
+  }
 
   buyBtn?.addEventListener("click", async () => {
     const user = getUser();
