@@ -541,6 +541,36 @@ function sleep(ms = 0) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isHttpLike(u) {
+  return /^https?:\/\//i.test(u || "");
+}
+
+function initialThumbSrc(raw) {
+  if (!raw) return FALLBACK_THUMB;
+  if (isHttpLike(raw) || raw.startsWith("data:")) return raw;
+  return FALLBACK_THUMB;
+}
+
+async function hydrateThumb(el, raw) {
+  if (!el) return;
+  if (!raw) { el.src = FALLBACK_THUMB; return; }
+  if (isHttpLike(raw) || raw.startsWith("data:")) { el.src = raw; return; }
+  el.src = FALLBACK_THUMB;
+  try {
+    const signed = await resolveStorageUrl(raw);
+    if (signed) el.src = signed;
+  } catch (_) {
+    el.src = FALLBACK_THUMB;
+  }
+}
+
+function hydrateThumbs(ctx = document) {
+  $$("img[data-thumb]", ctx).forEach((img) => {
+    const raw = img.getAttribute("data-thumb") || "";
+    hydrateThumb(img, raw);
+  });
+}
+
 function slimClassForCache(c) {
   if (!c || typeof c !== "object") return null;
   const id = c.id || c.classId;
@@ -1523,7 +1553,7 @@ function handleSettingsPage() {
 function renderClassCard(c, wide = false) {
   return `
     <div class="class-card ${wide ? "wide" : ""}" data-id="${escapeAttr(c.id)}">
-      <img class="thumb" src="${escapeAttr(c.thumb || FALLBACK_THUMB)}" alt="">
+      <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
       <div class="class-body">
         <div class="title2">${escapeHtml(c.title)}</div>
         <div class="sub2">선생님 · ${escapeHtml(c.teacher || "-")} · ${escapeHtml(c.category || "-")}</div>
@@ -1552,6 +1582,8 @@ function loadHomePopular() {
       goClassDetail(id);
     });
   });
+
+  hydrateThumbs(wrap);
 }
 
 function loadClassesPage() {
@@ -1593,6 +1625,8 @@ function loadClassesPage() {
         goClassDetail(id);
       });
     });
+
+    hydrateThumbs(grid);
   }
 
   categorySel?.addEventListener("change", applyFilter);
@@ -1874,6 +1908,8 @@ async function loadClassDetailPage() {
   }
 
   $("#detailImg").src = c.thumb || FALLBACK_THUMB;
+  $("#detailImg").setAttribute("data-thumb", c.thumb || "");
+  hydrateThumbs(root);
   $("#detailTitle").textContent = c.title || "-";
   $("#detailTeacher").textContent = c.teacher || "-";
   $("#detailCategory").textContent = c.category || "-";
@@ -2721,6 +2757,11 @@ async function loadClassDetailPage() {
             amap[c.id] = patched;
             setAssignments(amap);
           };
+
+          // 바로 화면에 반영 (느린 네트워크에서도 피드백 보장)
+          patchLocalGrade();
+          renderAssignments();
+          attachSubmissionFileFetchHandlers();
           try {
             btn.disabled = true;
             btn.textContent = "저장중...";
@@ -2738,8 +2779,6 @@ async function loadClassDetailPage() {
               const amap = getAssignments();
               amap[c.id] = refreshed || [];
               setAssignments(amap);
-            } else {
-              patchLocalGrade();
             }
             renderAssignments();
             showToast("채점이 저장됐어요.", "success");
@@ -3364,7 +3403,7 @@ function loadTeacherDashboard() {
     <div class="grid cols-2">
       ${mine.map(c => `
         <div class="class-card wide" style="cursor:default;">
-          <img class="thumb" src="${escapeAttr(c.thumb || FALLBACK_THUMB)}" alt="">
+          <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
           <div class="class-body">
             <div class="title2">${escapeHtml(c.title)}</div>
             <div class="sub2">카테고리 · ${escapeHtml(c.category || "-")}</div>
@@ -3384,6 +3423,8 @@ function loadTeacherDashboard() {
     </div>
     ${mine.length ? "" : `<p class="muted" style="margin-top:12px;">아직 만든 수업이 없어요.</p>`}
   `;
+
+  hydrateThumbs(wrap);
 
   $$('[data-open]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -3438,7 +3479,7 @@ function loadStudentDashboard() {
         const endText = e?.endAt ? fmtDateKR(e.endAt) : (e?.endDate || "-");
         return `
           <div class="class-card wide" style="cursor:default;">
-            <img class="thumb" src="${escapeAttr(c.thumb || FALLBACK_THUMB)}" alt="">
+            <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
             <div class="class-body">
               <div class="title2">${escapeHtml(c.title)}</div>
               <div class="sub2">선생님 · ${escapeHtml(c.teacher || "-")} · ${escapeHtml(c.category || "-")}</div>
@@ -3475,6 +3516,8 @@ function loadStudentDashboard() {
       location.href = `live_class.html?id=${encodeURIComponent(id)}&s=1`;
     });
   });
+
+  hydrateThumbs(wrap);
 }
 
 async function loadLivePage() {
