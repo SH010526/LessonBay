@@ -998,6 +998,8 @@ async function ensureSeedData() {
   const sessionPromise = syncLocalUserFromSupabaseSession().catch(() => {});
   await Promise.race([sessionPromise, sleep(1200)]);
 
+  const detailOnly = !!document.getElementById("detailRoot") && !document.getElementById("classGrid") && !document.getElementById("homePopular");
+
   const cached = loadCachedClasses();
   if (cached.length) {
     setClasses(cached);
@@ -1020,21 +1022,23 @@ async function ensureSeedData() {
   updateNav();
 
   // 원격 수업 목록
-  (async () => {
-    try {
-      const classes = await apiGet("/api/classes", { silent: true });
-      const normalized = (classes || []).map(c => ({
-        ...c,
-        teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
-        teacherId: c.teacherId || c.teacher?.id || "",
-        thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
-      }));
-      if (normalized.length) setClasses(normalized);
-      rerenderVisible();
-    } catch (e) {
-      console.error("classes fetch failed", e);
-    }
-  })();
+  if (!detailOnly) {
+    (async () => {
+      try {
+        const classes = await apiGet("/api/classes", { silent: true });
+        const normalized = (classes || []).map(c => ({
+          ...c,
+          teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
+          teacherId: c.teacherId || c.teacher?.id || "",
+          thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+        }));
+        if (normalized.length) setClasses(normalized);
+        rerenderVisible();
+      } catch (e) {
+        console.error("classes fetch failed", e);
+      }
+    })();
+  }
 
   // 원격 수강 정보
   if (user) {
@@ -1576,7 +1580,7 @@ function handleSettingsPage() {
 function renderClassCard(c, wide = false) {
   return `
     <div class="class-card ${wide ? "wide" : ""}" data-id="${escapeAttr(c.id)}">
-      <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
+      <img class="thumb" loading="lazy" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
       <div class="class-body">
         <div class="title2">${escapeHtml(c.title)}</div>
         <div class="sub2">선생님 · ${escapeHtml(c.teacher || "-")} · ${escapeHtml(c.category || "-")}</div>
@@ -1937,6 +1941,7 @@ async function loadClassDetailPage() {
 
   $("#detailImg").src = initialThumbSrc(c.thumb);
   $("#detailImg").setAttribute("data-thumb", c.thumb || "");
+  $("#detailImg").setAttribute("loading", "lazy");
   hydrateThumbs(root);
   $("#detailTitle").textContent = c.title || "-";
   $("#detailTeacher").textContent = c.teacher || "-";
@@ -4213,6 +4218,30 @@ function init() {
   normalizeUsersInStorage();
   normalizeCurrentUserInStorage(); // ? 핵심
   installGateBlockerOnce();        // ? <a> disabled blocking
+
+  // 네트워크 핸드셰이크 단축 (Supabase/Livekit/jsdelivr)
+  (function injectPreconnects() {
+    const origins = [
+      "https://cdn.jsdelivr.net",
+      SUPABASE_URL,
+      SUPABASE_URL.replace("https://", "https://*."),
+      "https://*.livekit.cloud",
+    ];
+    const head = document.head || document.getElementsByTagName("head")[0];
+    origins.forEach((o) => {
+      if (!o || document.querySelector(`link[data-preconnect="${o}"]`)) return;
+      const l1 = document.createElement("link");
+      l1.rel = "preconnect";
+      l1.href = o;
+      l1.setAttribute("data-preconnect", o);
+      const l2 = document.createElement("link");
+      l2.rel = "dns-prefetch";
+      l2.href = o;
+      l2.setAttribute("data-preconnect", o + ":dns");
+      head.appendChild(l1);
+      head.appendChild(l2);
+    });
+  })();
 
   // NAV 먼저 렌더하여 느린 API 때문에 UI가 비지 않도록 함
   updateNav();
