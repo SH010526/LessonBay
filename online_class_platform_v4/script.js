@@ -2596,7 +2596,6 @@ async function loadClassDetailPage() {
               score: scoreVal === "" ? null : Number(scoreVal),
               feedback: feedbackVal,
             });
-            showToast("채점이 저장되었습니다.", "success");
           } catch (e) {
             console.error(e);
             alert("채점 저장 실패\n" + (e?.message || ""));
@@ -2628,7 +2627,9 @@ async function loadClassDetailPage() {
           const url = res?.fileUrl;
           const name = res?.fileName || fname;
           if (!url) throw new Error("첨부가 없습니다.");
-          await forceDownload(url, name);
+          // data URL이면 파일명 주입
+          const finalUrl = url.startsWith("data:") ? encodeDataUrlWithName(url, name) : url;
+          await forceDownload(finalUrl, name);
         } catch (e) {
           alert("첨부를 불러오지 못했습니다.\n" + (e?.message || ""));
         } finally {

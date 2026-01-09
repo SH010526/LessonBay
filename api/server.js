@@ -1027,7 +1027,7 @@ app.post("/api/assignments/:assignmentId/submissions/:submissionId/grade", requi
     const assignment = await prisma.assignment.findUnique({ where: { id: assignmentId } });
     if (!assignment) return res.status(404).json({ error: "과제를 찾을 수 없습니다." });
 
-    const updated = await prisma.assignmentSubmission.update({
+    await prisma.assignmentSubmission.update({
       where: { id: submissionId },
       data: {
         score: score === null || score === undefined ? null : Number(score),
@@ -1035,7 +1035,14 @@ app.post("/api/assignments/:assignmentId/submissions/:submissionId/grade", requi
         gradedAt: new Date(),
       },
     });
-    res.json(updated);
+    // 파일(base64) 등 대용량을 보내지 않고 최소 정보만 반환
+    res.json({
+      id: submissionId,
+      assignmentId,
+      score: score === null || score === undefined ? null : Number(score),
+      feedback: feedback || null,
+      gradedAt: new Date(),
+    });
   } catch (err) {
     console.error("Assignment grade error:", err);
     res.status(500).json({ error: "과제 채점 실패", detail: err?.message || String(err) });
