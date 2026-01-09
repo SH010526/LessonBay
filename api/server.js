@@ -101,6 +101,25 @@ app.use(morgan("combined", { stream: accessLogStream }));
 
 const PORT = process.env.PORT || 3000;
 const kickedMap = new Map(); // classId -> Map<userId, expiresAt>
+const responseCache = new Map(); // key -> { value, expiresAt }
+
+function cacheGet(key) {
+  const hit = responseCache.get(key);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    responseCache.delete(key);
+    return null;
+  }
+  return hit.value;
+}
+
+function cacheSet(key, value, ttlMs) {
+  responseCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
+
+function setCacheHeaders(res, maxAgeSec = 30, swrSec = 120) {
+  res.set("Cache-Control", `public, max-age=${maxAgeSec}, stale-while-revalidate=${swrSec}`);
+}
 
 function inferFileNameFromUrl(url) {
   if (!url) return "";
@@ -544,10 +563,17 @@ app.post("/api/account/delete", requireAuth, async (req, res) => {
 // Classes
 app.get("/api/classes", async (_req, res) => {
   try {
+    const cached = cacheGet("classes:list");
+    if (cached) {
+      setCacheHeaders(res, 60, 300);
+      return res.json(cached);
+    }
     const list = await prisma.class.findMany({
       orderBy: { createdAt: "desc" },
       include: { teacher: true },
     });
+    cacheSet("classes:list", list, 60 * 1000);
+    setCacheHeaders(res, 60, 300);
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -557,6 +583,12 @@ app.get("/api/classes", async (_req, res) => {
 
 app.get("/api/classes/:id", async (req, res) => {
   try {
+    const cacheKey = `classes:detail:${req.params.id}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      setCacheHeaders(res, 60, 300);
+      return res.json(cached);
+    }
     const cls = await prisma.class.findUnique({
       where: { id: req.params.id },
       include: {
@@ -565,6 +597,8 @@ app.get("/api/classes/:id", async (req, res) => {
       },
     });
     if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
+    cacheSet(cacheKey, cls, 60 * 1000);
+    setCacheHeaders(res, 60, 300);
     res.json(cls);
   } catch (err) {
     console.error(err);
