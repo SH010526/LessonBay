@@ -264,26 +264,34 @@ async function uploadToSupabaseStorage(file, prefix = "uploads") {
   return { path, signedUrl: signed?.signedUrl || null };
 }
 
-function buildPublicStorageUrl(path) {
+function buildPublicStorageUrl(path, bucket = STORAGE_BUCKET) {
   if (!path || isHttpLike(path) || path.startsWith("data:")) return path || null;
-  // 이미 public URL이면 그대로 사용
-  if (path.includes("/storage/v1/object/public/")) return path;
-  const clean = path.replace(/^\/+/, "");
-  // path가 이미 버킷으로 시작하면 중복을 피한다
-  const withBucket = clean.startsWith(`${STORAGE_BUCKET}/`) ? clean : `${STORAGE_BUCKET}/${clean}`;
+  const { bucket: b, path: p } = normalizeStoragePath(path, bucket);
+  const clean = String(p || "").replace(/^\/+/, "");
+  const withBucket = b ? `${b}/${clean}` : clean;
   return `${SUPABASE_URL}/storage/v1/object/public/${withBucket}`;
 }
 
-function extractStoragePath(urlStr) {
-  if (!urlStr || !isHttpLike(urlStr)) return "";
+function normalizeStoragePath(path, defaultBucket = STORAGE_BUCKET) {
+  const clean = String(path || "").replace(/^\/+/, "");
+  const parts = clean.split("/");
+  const knownPrefixes = new Set(["class-thumbs", "materials", "replays", "uploads"]);
+  if (parts.length > 1 && knownPrefixes.has(parts[1])) {
+    return { bucket: parts[0], path: parts.slice(1).join("/") };
+  }
+  return { bucket: defaultBucket, path: clean };
+}
+
+function parseSupabaseStorageUrl(urlStr) {
+  if (!urlStr || !isHttpLike(urlStr)) return null;
   try {
     const u = new URL(urlStr);
-    if (!u.hostname.includes("supabase.co")) return "";
+    if (!u.hostname.includes("supabase.co")) return null;
     const m = u.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
-    if (!m) return "";
-    return `${m[1]}/${m[2]}`;
+    if (!m) return null;
+    return { bucket: m[1], path: m[2] };
   } catch (_) {
-    return "";
+    return null;
   }
 }
 
@@ -291,14 +299,18 @@ async function resolveStorageUrl(urlOrPath) {
   ensureSupabaseClient();
   if (!urlOrPath || urlOrPath.startsWith("data:")) return urlOrPath;
   if (isHttpLike(urlOrPath)) {
-    const extracted = extractStoragePath(urlOrPath);
-    if (!extracted) return urlOrPath;
-    urlOrPath = extracted;
+    const parsed = parseSupabaseStorageUrl(urlOrPath);
+    if (!parsed) return urlOrPath;
+    if (!supabaseClient) return buildPublicStorageUrl(parsed.path, parsed.bucket);
+    const { data, error } = await supabaseClient.storage.from(parsed.bucket).createSignedUrl(parsed.path, 60 * 60 * 24);
+    if (error) return buildPublicStorageUrl(parsed.path, parsed.bucket);
+    return data?.signedUrl || buildPublicStorageUrl(parsed.path, parsed.bucket);
   }
   if (!supabaseClient) return buildPublicStorageUrl(urlOrPath);
-  const { data, error } = await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(urlOrPath, 60 * 60 * 24);
-  if (error) return buildPublicStorageUrl(urlOrPath);
-  return data?.signedUrl || buildPublicStorageUrl(urlOrPath);
+  const norm = normalizeStoragePath(urlOrPath, STORAGE_BUCKET);
+  const { data, error } = await supabaseClient.storage.from(norm.bucket).createSignedUrl(norm.path, 60 * 60 * 24);
+  if (error) return buildPublicStorageUrl(norm.path, norm.bucket);
+  return data?.signedUrl || buildPublicStorageUrl(norm.path, norm.bucket);
 }
 async function resolveStorageDownloadUrl(path, filename) {
   ensureSupabaseClient();
@@ -316,13 +328,20 @@ async function resolveStorageDownloadUrl(path, filename) {
 
   // 이미 서명된 전체 URL인 경우에도 download 파라미터를 보장
   if (/^https?:\/\//i.test(path) || path.startsWith("data:")) {
-    return addDownloadParam(path, filename || "download");
+    const parsed = parseSupabaseStorageUrl(path);
+    if (!parsed) return addDownloadParam(path, filename || "download");
+    if (!supabaseClient) return addDownloadParam(buildPublicStorageUrl(parsed.path, parsed.bucket) || path, filename || "download");
+    const opts2 = filename ? { download: filename } : undefined;
+    const { data, error } = await supabaseClient.storage.from(parsed.bucket).createSignedUrl(parsed.path, 60 * 60 * 24, opts2);
+    if (error) return addDownloadParam(buildPublicStorageUrl(parsed.path, parsed.bucket) || path, filename || "download");
+    return addDownloadParam(data?.signedUrl || path, filename || "download");
   }
 
-  if (!supabaseClient) return path;
+  const norm = normalizeStoragePath(path, STORAGE_BUCKET);
+  if (!supabaseClient) return buildPublicStorageUrl(norm.path, norm.bucket) || path;
   const opts = filename ? { download: filename } : undefined;
-  const { data, error } = await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(path, 60 * 60 * 24, opts);
-  if (error) return path;
+  const { data, error } = await supabaseClient.storage.from(norm.bucket).createSignedUrl(norm.path, 60 * 60 * 24, opts);
+  if (error) return buildPublicStorageUrl(norm.path, norm.bucket) || path;
   return addDownloadParam(data?.signedUrl || path, filename || "download");
 }
 
@@ -575,8 +594,6 @@ function isHttpLike(u) {
 
 function initialThumbSrc(raw) {
   if (!raw) return FALLBACK_THUMB;
-  const extracted = extractStoragePath(raw);
-  if (extracted) return buildPublicStorageUrl(extracted) || FALLBACK_THUMB;
   if (isHttpLike(raw) || raw.startsWith("data:")) return raw;
   return buildPublicStorageUrl(raw) || FALLBACK_THUMB;
 }
@@ -584,10 +601,26 @@ function initialThumbSrc(raw) {
 async function hydrateThumb(el, raw) {
   if (!el) return;
   if (!raw) { el.src = FALLBACK_THUMB; return; }
-  if (isHttpLike(raw) || raw.startsWith("data:")) { el.src = raw; return; }
-  el.src = buildPublicStorageUrl(raw) || FALLBACK_THUMB;
+  if (isHttpLike(raw) || raw.startsWith("data:")) { el.src = raw; }
+  else { el.src = buildPublicStorageUrl(raw) || FALLBACK_THUMB; }
 
   const retryCnt = Number(el.getAttribute("data-thumb-retry") || "0");
+  if (!el.dataset.thumbErrorBound) {
+    el.dataset.thumbErrorBound = "1";
+    el.addEventListener("error", async () => {
+      if (el.dataset.thumbFallback === "1") return;
+      try {
+        const refreshed = await resolveStorageUrl(raw);
+        if (refreshed && refreshed !== el.src) {
+          el.dataset.thumbFallback = "1";
+          el.src = refreshed;
+          return;
+        }
+      } catch (_) {}
+      el.dataset.thumbFallback = "1";
+      el.src = FALLBACK_THUMB;
+    }, { once: true });
+  }
 
   try {
     const signed = await resolveStorageUrl(raw);
