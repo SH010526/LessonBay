@@ -345,6 +345,15 @@ async function resolveStorageDownloadUrl(path, filename) {
   return addDownloadParam(data?.signedUrl || path, filename || "download");
 }
 
+function encodeDataUrlWithName(dataUrl, fname) {
+  if (!dataUrl || !dataUrl.startsWith("data:")) return dataUrl;
+  const parts = dataUrl.split(";base64,");
+  if (parts.length !== 2) return dataUrl;
+  const [meta, b64] = parts;
+  const name = encodeURIComponent(fname || "file");
+  return `${meta};name=${name};base64,${b64}`;
+}
+
 async function forceDownload(url, filename = "download") {
   try {
     const res = await fetch(url, { mode: "cors" });
