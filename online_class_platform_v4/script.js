@@ -681,6 +681,7 @@ const PREFETCH_CLASS_KEY = "lessonbay:prefetchClassV1";
 const ENROLL_CACHE_KEY = "lessonbay:enrollCacheV1";
 const CACHE_TTL_MS = 1000 * 60 * 10; // 10분 캐시
 const ENROLL_CACHE_TTL_MS = 1000 * 60 * 2; // 2분 캐시
+const PREFETCH_PAGE_TTL_MS = 1000 * 60 * 5; // 5분 캐시
 
 function sleep(ms = 0) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -688,6 +689,12 @@ function sleep(ms = 0) {
 
 function isHttpLike(u) {
   return /^https?:\/\//i.test(u || "");
+}
+
+function isProdOrigin() {
+  if (typeof location === "undefined") return false;
+  const origin = location.origin || "";
+  return origin.includes("railway.app") || origin.includes("lessonbay");
 }
 
 function initialThumbSrc(raw) {
@@ -816,6 +823,69 @@ function loadCachedEnrollments(user) {
   } catch (_) {
     return null;
   }
+}
+
+function prefetchPage(href) {
+  if (!href || typeof document === "undefined") return;
+  const url = href.split("#")[0];
+  if (!url.endsWith(".html") && !url.includes(".html?") && !url.includes(".html&")) return;
+  const key = `prefetch:${url}`;
+  try {
+    const cached = sessionStorage.getItem(key);
+    if (cached) {
+      const parsed = safeParse(cached, null);
+      if (parsed?.at && Date.now() - parsed.at < PREFETCH_PAGE_TTL_MS) return;
+    }
+  } catch (_) {}
+  if (document.querySelector(`link[data-prefetch="${url}"]`)) return;
+  const link = document.createElement("link");
+  link.rel = "prefetch";
+  link.href = url;
+  link.setAttribute("data-prefetch", url);
+  document.head.appendChild(link);
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ at: Date.now() }));
+  } catch (_) {}
+}
+
+function prefetchCorePages() {
+  if (!isProdOrigin()) return;
+  const pages = [
+    "index.html",
+    "classes.html",
+    "class_detail.html",
+    "teacher_dashboard.html",
+    "student_dashboard.html",
+    "create_class.html",
+    "settings.html",
+    "live_class.html",
+  ];
+  pages.forEach(prefetchPage);
+}
+
+function bindNavPrefetch() {
+  if (typeof document === "undefined") return;
+  document.addEventListener("pointerenter", (e) => {
+    const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a) return;
+    const href = a.getAttribute("href") || "";
+    if (!href || href.startsWith("http")) return;
+    prefetchPage(href);
+  }, true);
+}
+
+function warmupBackend() {
+  if (!isProdOrigin()) return;
+  const ping = () => {
+    try {
+      fetch(`${API_BASE_URL}/api/health`, { cache: "no-store", keepalive: true }).catch(() => {});
+    } catch (_) {}
+  };
+  ping();
+  setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    ping();
+  }, 60 * 1000);
 }
 
 function cachePrefetchClass(cls) {
@@ -4595,6 +4665,9 @@ function init() {
   // NAV 먼저 렌더하여 느린 API 때문에 UI가 비지 않도록 함
   updateNav();
   runReveal();
+  prefetchCorePages();
+  bindNavPrefetch();
+  warmupBackend();
 
   // 화면 즉시 렌더, 데이터는 백그라운드
   if ($("#homePopular")) loadHomePopular();

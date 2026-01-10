@@ -99,6 +99,12 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 app.use(morgan("tiny"));
 app.use(morgan("combined", { stream: accessLogStream }));
 
+// Health check (fast response for warmup/ping)
+app.get("/api/health", (_req, res) => {
+  setCacheHeaders(res, 10, 30);
+  res.json({ ok: true, ts: Date.now() });
+});
+
 const PORT = process.env.PORT || 3000;
 const kickedMap = new Map(); // classId -> Map<userId, expiresAt>
 const responseCache = new Map(); // key -> { value, expiresAt }
