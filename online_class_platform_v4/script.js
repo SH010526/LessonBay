@@ -872,6 +872,13 @@ async function blobToDataUrl(blob) {
   });
 }
 function normalizeEmail(email) { return String(email || "").trim().toLowerCase(); }
+function isOwnerTeacherForClass(user, cls) {
+  if (!user || !cls) return false;
+  if (user.role !== "teacher") return false;
+  if (user.id && cls.teacherId) return user.id === cls.teacherId;
+  if (user.name && cls.teacher) return user.name === cls.teacher;
+  return false;
+}
 
 // ---------------------------
 // ? BUTTON LOADING (signup 등에서 사용)
@@ -2197,7 +2204,7 @@ async function loadClassDetailPage() {
     if (!user) return { state: "guest", e: null, active: false, endText: "-" };
 
     if (user.role === "teacher") {
-      const isOwnerTeacher = (user.id && c.teacherId && user.id === c.teacherId) || (user.name === c.teacher);
+      const isOwnerTeacher = isOwnerTeacherForClass(user, c);
       return { state: isOwnerTeacher ? "owner_teacher" : "other_teacher", e: null, active: true, endText: "-" };
     }
 
@@ -2335,7 +2342,7 @@ function ensureProtectedData() {
           return;
         }
 
-        const isOwnerTeacher = (u.role === "teacher" && ((u.id && c.teacherId && u.id === c.teacherId) || u.name === c.teacher));
+        const isOwnerTeacher = isOwnerTeacherForClass(u, c);
 
         if (u.role === "teacher") {
           if (!isOwnerTeacher) {
@@ -2494,7 +2501,7 @@ function ensureProtectedData() {
     assignPendingSelect = null;
     const meta = (selectedAssignId && assignMap[selectedAssignId]) ? assignMap[selectedAssignId] : (assignList[assignList.length - 1] || {});
 
-    const isOwnerTeacher = (user?.role === "teacher") || ((user?.id && c.teacherId && user.id === c.teacherId) || user?.name === c.teacher);
+    const isOwnerTeacher = isOwnerTeacherForClass(user, c);
     const myEmail = normalizeEmail(user?.email || "");
     const submissions = Array.isArray(meta?.submissions) ? meta.submissions : [];
     const myAssign = submissions.find(a => normalizeEmail(a.userEmail || a.studentEmail || "") === myEmail || a.studentId === user?.id) || null;
@@ -3190,9 +3197,9 @@ function ensureProtectedData() {
 
   // 자료 업로드 (선생님만)
   const matForm = $("#materialFormWrap");
-  if (matForm) matForm.style.display = (user?.role === "teacher" && user?.name === c.teacher) ? "block" : "none";
+  if (matForm) matForm.style.display = isOwnerTeacherForClass(user, c) ? "block" : "none";
   $("#matUploadBtn")?.addEventListener("click", () => {
-    if (!(user?.role === "teacher" && user?.name === c.teacher)) return;
+    if (!isOwnerTeacherForClass(user, c)) return;
     const title = ($("#matTitle")?.value || "").trim();
     const file = $("#matFile")?.files?.[0] || null;
     if (!title || !file) { alert("제목과 파일을 입력하세요."); return; }
@@ -3707,7 +3714,23 @@ function loadTeacherDashboard() {
     if (!user) { location.href = "login.html"; return; }
     if (user.role !== "teacher") { location.href = "student_dashboard.html"; return; }
 
-    const mine = getClasses().filter(c => c.teacher === user.name);
+    let classes = getClasses();
+    if (!classes.length) {
+      try {
+        const refreshed = await apiGet("/api/classes", { silent: true });
+        if (Array.isArray(refreshed)) {
+          const normalized = refreshed.map(c => ({
+            ...c,
+            teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
+            teacherId: c.teacherId || c.teacher?.id || "",
+            thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+          }));
+          setClasses(normalized);
+          classes = normalized;
+        }
+      } catch (_) {}
+    }
+    const mine = classes.filter(c => isOwnerTeacherForClass(user, c));
 
     wrap.innerHTML = `
       <div class="grid cols-2">
@@ -3782,11 +3805,27 @@ function loadStudentDashboard() {
     if (!user) { location.href = "login.html"; return; }
     if (user.role !== "student") { location.href = "teacher_dashboard.html"; return; }
 
-    const classes = getClasses().filter(c => !!readEnrollmentForUser(user, c.id));
+    let classes = getClasses();
+    if (!classes.length) {
+      try {
+        const refreshed = await apiGet("/api/classes", { silent: true });
+        if (Array.isArray(refreshed)) {
+          const normalized = refreshed.map(c => ({
+            ...c,
+            teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
+            teacherId: c.teacherId || c.teacher?.id || "",
+            thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+          }));
+          setClasses(normalized);
+          classes = normalized;
+        }
+      } catch (_) {}
+    }
+    const enrolledClasses = classes.filter(c => !!readEnrollmentForUser(user, c.id));
 
     wrap.innerHTML = `
       <div class="grid cols-2">
-        ${classes.map(c => {
+        ${enrolledClasses.map(c => {
           const e = readEnrollmentForUser(user, c.id);
           const active = isEnrollmentActiveForUser(user, c.id);
           const endText = e?.endAt ? fmtDateKR(e.endAt) : (e?.endDate || "-");
@@ -3813,7 +3852,7 @@ function loadStudentDashboard() {
           `;
         }).join("")}
       </div>
-      ${classes.length ? "" : `<p class="muted" style="margin-top:12px;">아직 수강 중인 수업이 없어요.</p>`}
+      ${enrolledClasses.length ? "" : `<p class="muted" style="margin-top:12px;">아직 수강 중인 수업이 없어요.</p>`}
     `;
 
     $$('[data-open]').forEach(btn => {
@@ -3846,7 +3885,25 @@ async function loadLivePage() {
     return;
   }
   rememberClassId(classId);
-  const c = getClasses().find(x => x.id === classId);
+  let c = getClasses().find(x => x.id === classId);
+  if (!c) {
+    try {
+      const remote = await apiGet(`/api/classes/${encodeURIComponent(classId)}`, { silent: true });
+      if (remote) {
+        const normalized = {
+          ...remote,
+          teacher: remote.teacher?.name || remote.teacherName || remote.teacher || "-",
+          teacherId: remote.teacherId || remote.teacher?.id || "",
+          thumb: remote.thumbUrl || remote.thumb || FALLBACK_THUMB,
+        };
+        const next = [...getClasses().filter(x => x.id !== classId), normalized];
+        setClasses(next);
+        c = normalized;
+      }
+    } catch (e) {
+      console.error("live class fetch failed", e);
+    }
+  }
 
   if (!c) { $("#liveTitle").textContent = "수업을 찾을 수 없습니다."; return; }
 
@@ -3854,7 +3911,7 @@ async function loadLivePage() {
   if (!user) user = await ensureUserReady();
   if (!user) { alert("로그인이 필요합니다."); location.href = "login.html"; return; }
 
-  const isOwnerTeacher = (user.role === "teacher" && ((user.id && c.teacherId && user.id === c.teacherId) || user.name === c.teacher));
+  const isOwnerTeacher = isOwnerTeacherForClass(user, c);
   const isStudentActive = (user.role === "student" && isEnrollmentActiveForUser(user, classId));
 
   if (!isOwnerTeacher && user.role === "student" && !isStudentActive) {
