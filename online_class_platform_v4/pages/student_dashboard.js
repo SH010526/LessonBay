@@ -34,7 +34,7 @@ function loadStudentDashboard() {
           const endText = e?.endAt ? fmtDateKR(e.endAt) : (e?.endDate || "-");
           return `
             <div class="class-card wide" style="cursor:default;">
-              <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
+              <img class="thumb" loading="lazy" decoding="async" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
               <div class="class-body">
                 <div class="title2">${escapeHtml(c.title)}</div>
                 <div class="sub2">선생님 · ${escapeHtml(c.teacher || "-")} · ${escapeHtml(c.category || "-")}</div>
@@ -57,6 +57,7 @@ function loadStudentDashboard() {
       </div>
       ${enrolledClasses.length ? "" : `<p class="muted" style="margin-top:12px;">아직 수강 중인 수업이 없어요.</p>`}
     `;
+    wrap.dataset.hydrated = "1";
 
     $$('[data-open]').forEach(btn => {
       btn.addEventListener('click', () => {

@@ -1446,7 +1446,7 @@ function setClasses(list) {
 function renderClassCard(c, wide = false) {
   return `
     <div class="class-card ${wide ? "wide" : ""}" data-id="${escapeAttr(c.id)}">
-      <img class="thumb" loading="lazy" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
+      <img class="thumb" loading="lazy" decoding="async" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
       <div class="class-body">
         <div class="title2">${escapeHtml(c.title)}</div>
         <div class="sub2">선생님 · ${escapeHtml(c.teacher || "-")} · ${escapeHtml(c.category || "-")}</div>
@@ -2015,23 +2015,47 @@ function init() {
     // NAV 먼저 렌더하여 느린 API 때문에 UI가 비지 않도록 함
     updateNav();
     runReveal();
-    prefetchCorePages();
-    bindNavPrefetch();
     bindSoftNavigation();
     warmupBackend();
 
     // 화면 즉시 렌더, 데이터는 백그라운드
-    if (typeof loadHomePopular === "function" && $("#homePopular")) loadHomePopular();
-    if (typeof loadClassesPage === "function" && $("#classGrid")) loadClassesPage();
     if (typeof handleCreateClassPage === "function" && $("#createClassForm")) handleCreateClassPage();
     if (typeof handleLoginPage === "function" && $("#loginForm")) handleLoginPage();
     if (typeof handleSignupPage === "function" && $("#signupForm")) handleSignupPage();
     if (typeof handleSettingsPage === "function" && $("#settingsRoot")) handleSettingsPage();
-    if (typeof loadTeacherDashboard === "function" && $("#teacherDash")) loadTeacherDashboard();
-    if (typeof loadStudentDashboard === "function" && $("#studentDash")) loadStudentDashboard();
     if (typeof loadLivePage === "function" && $("#liveRoot")) loadLivePage();
 
     ensureSeedData();
+
+    // 히어로 이후 요소는 브라우저 유휴 시간에 렌더
+    scheduleIdleTask(() => {
+      prefetchCorePages();
+      bindNavPrefetch();
+    }, 1500);
+    const homePopular = $("#homePopular");
+    if (typeof loadHomePopular === "function" && homePopular && homePopular.dataset.hydrated !== "1") {
+      scheduleIdleTask(() => {
+        if (homePopular.dataset.hydrated !== "1") loadHomePopular();
+      }, 1200);
+    }
+    const classGrid = $("#classGrid");
+    if (typeof loadClassesPage === "function" && classGrid && classGrid.dataset.hydrated !== "1") {
+      scheduleIdleTask(() => {
+        if (classGrid.dataset.hydrated !== "1") loadClassesPage();
+      }, 1200);
+    }
+    const teacherDash = $("#teacherDash");
+    if (typeof loadTeacherDashboard === "function" && teacherDash && teacherDash.dataset.hydrated !== "1") {
+      scheduleIdleTask(() => {
+        if (teacherDash.dataset.hydrated !== "1") loadTeacherDashboard();
+      }, 1200);
+    }
+    const studentDash = $("#studentDash");
+    if (typeof loadStudentDashboard === "function" && studentDash && studentDash.dataset.hydrated !== "1") {
+      scheduleIdleTask(() => {
+        if (studentDash.dataset.hydrated !== "1") loadStudentDashboard();
+      }, 1200);
+    }
 
     if (getPath() === "logout.html") doLogout(true);
   });

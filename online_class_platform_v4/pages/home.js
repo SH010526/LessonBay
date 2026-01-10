@@ -7,6 +7,7 @@ function loadHomePopular() {
   if (!top.length) return;
 
   wrap.innerHTML = top.map(c => renderClassCard(c)).join("");
+  wrap.dataset.hydrated = "1";
 
   $$(".class-card", wrap).forEach(card => {
     card.addEventListener("click", () => {

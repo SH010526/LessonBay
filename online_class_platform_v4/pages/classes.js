@@ -30,6 +30,7 @@ function loadClassesPage() {
 
     grid.innerHTML = filtered.map(c => renderClassCard(c, true)).join("") +
       (filtered.length ? "" : `<p class="muted" style="margin-top:14px;">조건에 맞는 수업이 없어요.</p>`);
+    grid.dataset.hydrated = "1";
 
     $$(".class-card", grid).forEach(card => {
       card.addEventListener("click", () => {

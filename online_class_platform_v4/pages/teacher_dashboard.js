@@ -30,7 +30,7 @@ function loadTeacherDashboard() {
       <div class="grid cols-2">
         ${mine.map(c => `
           <div class="class-card wide" style="cursor:default;">
-            <img class="thumb" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
+            <img class="thumb" loading="lazy" decoding="async" src="${escapeAttr(initialThumbSrc(c.thumb))}" data-thumb="${escapeAttr(c.thumb || "")}" alt="">
             <div class="class-body">
               <div class="title2">${escapeHtml(c.title)}</div>
               <div class="sub2">카테고리 · ${escapeHtml(c.category || "-")}</div>
@@ -50,6 +50,7 @@ function loadTeacherDashboard() {
       </div>
       ${mine.length ? "" : `<p class="muted" style="margin-top:12px;">아직 만든 수업이 없어요.</p>`}
     `;
+    wrap.dataset.hydrated = "1";
 
     hydrateThumbs(wrap);
 

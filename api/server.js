@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const fs = require("fs");
@@ -62,6 +63,8 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" },
 }));
+
+app.use(compression({ threshold: 1024 }));
 
 // CORS: 기본으로 로컬 허용, FRONTEND_ORIGINS(콤마) 지정 시 그 도메인만 허용
 const defaultOrigins = [
@@ -135,6 +138,10 @@ function cacheDelPrefix(prefix) {
 
 function setCacheHeaders(res, maxAgeSec = 30, swrSec = 120) {
   res.set("Cache-Control", `public, max-age=${maxAgeSec}, stale-while-revalidate=${swrSec}`);
+}
+
+function setHtmlCacheHeaders(res) {
+  res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
 }
 
 function stripTimestampPrefix(name) {
@@ -1728,7 +1735,10 @@ const clientDir = path.join(__dirname, "..", "online_class_platform_v4");
 app.get(["/class_detail/:id", "/live_class/:id", "/classes/:id"], (req, res, next) => {
   const base = (req.path.split("/")[1] || "").toLowerCase();
   const file = path.join(clientDir, `${base}.html`);
-  if (fs.existsSync(file)) return res.sendFile(file);
+  if (fs.existsSync(file)) {
+    setHtmlCacheHeaders(res);
+    return res.sendFile(file);
+  }
   next();
 });
 
@@ -1748,14 +1758,26 @@ app.use((req, res, next) => {
     const clean = req.path === "/" ? "/index" : req.path.replace(/\/+$/, "");
     const candidate = path.join(clientDir, `${clean}.html`);
     if (fs.existsSync(candidate)) {
+      setHtmlCacheHeaders(res);
       return res.sendFile(candidate);
     }
   }
   next();
 });
 
-app.use(express.static(clientDir, { maxAge: "5m" }));
+app.use(express.static(clientDir, {
+  maxAge: "7d",
+  immutable: true,
+  setHeaders(res, filePath) {
+    if (path.extname(filePath) === ".html") {
+      setHtmlCacheHeaders(res);
+      return;
+    }
+    res.set("Cache-Control", "public, max-age=604800, immutable");
+  },
+}));
 app.get("*", (req, res) => {
+  setHtmlCacheHeaders(res);
   res.sendFile(path.join(clientDir, "index.html"));
 });
 
