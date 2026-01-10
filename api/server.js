@@ -1816,8 +1816,13 @@ app.use(express.static(clientDir, {
   maxAge: "7d",
   immutable: true,
   setHeaders(res, filePath) {
-    if (path.extname(filePath) === ".html") {
+    const ext = path.extname(filePath);
+    if (ext === ".html") {
       setHtmlCacheHeaders(res);
+      return;
+    }
+    if (ext === ".js" || ext === ".css" || ext === ".json") {
+      res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
       return;
     }
     res.set("Cache-Control", "public, max-age=604800, immutable");
