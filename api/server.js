@@ -123,6 +123,16 @@ function cacheSet(key, value, ttlMs) {
   responseCache.set(key, { value, expiresAt: Date.now() + ttlMs });
 }
 
+function cacheDel(key) {
+  responseCache.delete(key);
+}
+
+function cacheDelPrefix(prefix) {
+  for (const key of responseCache.keys()) {
+    if (key.startsWith(prefix)) responseCache.delete(key);
+  }
+}
+
 function setCacheHeaders(res, maxAgeSec = 30, swrSec = 120) {
   res.set("Cache-Control", `public, max-age=${maxAgeSec}, stale-while-revalidate=${swrSec}`);
 }
@@ -656,6 +666,7 @@ app.post("/api/classes", requireAuth, requireTeacher, async (req, res) => {
         teacherId: req.user.id,
       },
     });
+    cacheDel("classes:list");
     res.status(201).json(cls);
   } catch (err) {
     console.error("class create error:", err);
@@ -691,6 +702,11 @@ app.delete("/api/classes/:id", requireAuth, async (req, res) => {
       prisma.session.deleteMany({ where: { classId } }),
       prisma.class.delete({ where: { id: classId } }),
     ]);
+    cacheDel("classes:list");
+    cacheDel(`classes:detail:${classId}`);
+    cacheDelPrefix(`replays:${classId}:`);
+    cacheDelPrefix(`assign:${classId}:`);
+    cacheDelPrefix("enroll:");
 
     res.json({ ok: true });
   } catch (err) {

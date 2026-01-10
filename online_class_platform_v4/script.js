@@ -17,7 +17,6 @@
    - 세션 기반으로 localStorage(K.USER) 동기화해서
      기존 UI/권한 로직(teacher/student)을 그대로 살림
    ============================ */
-   // 렌더링 관련 코드는 
 
 const SUPABASE_URL = "https://pqvdexhxytahljultmjd.supabase.co";   // Project URL
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxdmRleGh4eXRhaGxqdWx0bWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5NjMzNTMsImV4cCI6MjA4MTUzOTM1M30.WzJWY3-92Bwkic-Wb2rOmZ1joEUj-s69cSL2hPT79fQ";             // anon public key
@@ -294,9 +293,16 @@ function bootPageScripts() {
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 1000) {
-  if (!timeoutMs) return fetch(url, options);
+  if (!timeoutMs) return fetch(url, options); // 의미 : 타임아웃이 아니라면 그냥 fetch 실행
+  // 
+  //fetch 뜻 : 자바스크립트에서 제공하는 내장 함수로, 네트워크를 통해 리소스를 비동기적으로 가져오는 데 사용됩니다.
+  // 네트워크를 통해 리소스를 비동기적으로 가져온다는 의미 : fetch는 네트워크 요청을 비동기적으로 처리하여, 페이지가 로딩되는 동안 다른 작업을 할 수 있도록 합니다.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // assertion 304 뜻 : HTTP 상태 코드 304는 "Not Modified"를 의미하며, 클라이언트가 요청한 리소스가 서버에서 변경되지 않았음을 나타냅니다.
+  //위의 글의 의미 : 즉, 클라이언트가 이전에 받은 리소스를 다시 요청했을 때, 서버는 해당 리소스가 변경되지 않았으므로 클라이언트에게 동일한 리소스를 다시 보내지 않고, 
+  // 클라이언트가 캐시된 버전을 사용할 수 있도록 지시합니다.
+
   try {
     return await fetch(url, { ...options, signal: controller.signal }); // abort signal 뜻 : 요청이 타임아웃되었을 때 요청을 중단하는 신호
     //현재 타임아웃 시간은 1000ms로 설정되어 있습니다. 이 값은 fetch 요청이 1초 이상 걸릴 경우 요청을 중단하도록 지정합니다.
