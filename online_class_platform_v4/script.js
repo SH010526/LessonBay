@@ -110,6 +110,12 @@ const API_BASE_URL = (() => {
 // In-memory caches (no localStorage/IndexedDB)
 let userCache = null;
 let __authInvalidated = false;
+let enrollmentsSynced = false;
+let enrollmentsSyncing = false;
+let enrollmentsLastAt = 0;
+let enrollmentsLastError = null;
+let enrollFetchPromise = null;
+let enrollFetchKey = "";
 const dataCache = {
   classes: [],
   enrollments: {},   // userKey -> classId -> record
@@ -1112,6 +1118,51 @@ function loadCachedEnrollments(user) {
   }
 }
 
+async function fetchEnrollmentsForUser(u, attempt = 0, opts = {}) {
+  const key = getUserCacheKey(u);
+  if (!key) return null;
+  if (!opts.force && enrollFetchPromise && enrollFetchKey === key) return enrollFetchPromise;
+
+  enrollFetchKey = key;
+  enrollmentsSyncing = true;
+  enrollmentsLastError = null;
+
+  const timeoutMs = Number(opts.timeoutMs) || (attempt === 0 ? 5000 : 10000);
+  enrollFetchPromise = (async () => {
+    try {
+      const token = await getAuthToken();
+      if (!token) {
+        if (attempt < 2) {
+          setTimeout(() => fetchEnrollmentsForUser(u, attempt + 1, { force: true, timeoutMs }), 1200 * (attempt + 1));
+        }
+        return null;
+      }
+      const enrollList = await apiGet("/api/me/enrollments", { silent: true, timeout: timeoutMs, tolerateTimeout: false });
+      if (Array.isArray(enrollList)) {
+        setEnrollments(enrollList || []);
+        cacheEnrollments(u, enrollList || []);
+        markEnrollmentsSynced();
+        return enrollList;
+      }
+      if (attempt < 2) {
+        setTimeout(() => fetchEnrollmentsForUser(u, attempt + 1, { force: true, timeoutMs }), 4000 * (attempt + 1));
+      }
+      return enrollList || null;
+    } catch (e) {
+      enrollmentsLastError = e;
+      if (attempt < 2) {
+        setTimeout(() => fetchEnrollmentsForUser(u, attempt + 1, { force: true, timeoutMs }), 4000 * (attempt + 1));
+      }
+      return null;
+    } finally {
+      enrollmentsSyncing = false;
+      enrollFetchPromise = null;
+    }
+  })();
+
+  return enrollFetchPromise;
+}
+
 function prefetchPage(href) {
   if (!href || typeof document === "undefined") return;
   const url = href.split("#")[0];
@@ -1567,6 +1618,16 @@ function setEnrollments(v) {
   if (!out || typeof out !== "object") out = {};
   dataCache.enrollments = out;
 }
+function isEnrollmentsSynced() { return enrollmentsSynced; }
+function isEnrollmentsSyncing() { return enrollmentsSyncing; }
+function markEnrollmentsSynced(at = Date.now()) {
+  enrollmentsSynced = true;
+  enrollmentsLastAt = at;
+}
+function markEnrollmentsUnsynced() {
+  enrollmentsSynced = false;
+  enrollmentsLastAt = 0;
+}
 
 function getReplays() { return dataCache.replays; }
 function setReplays(v) { dataCache.replays = v || {}; }
@@ -1800,11 +1861,14 @@ async function ensureSeedData() {
     const cachedEnroll = loadCachedEnrollments(user);
     if (cachedEnroll) {
       setEnrollments(cachedEnroll);
+      markEnrollmentsSynced();
     } else {
       setEnrollments({});
+      markEnrollmentsUnsynced();
     }
   } else {
     setEnrollments({});
+    markEnrollmentsUnsynced();
   }
 
   // 초기 데이터로 한 번 갱신
@@ -1843,42 +1907,9 @@ async function ensureSeedData() {
     fetchClassesRemote(0);
   }
 
-  let enrollFetchPromise = null;
-  let enrollFetchKey = "";
-  const loadEnrollmentsFor = async (u, attempt = 0) => {
-    const key = getUserCacheKey(u);
-    if (!key) return;
-    if (enrollFetchPromise && enrollFetchKey === key) return enrollFetchPromise;
-    enrollFetchKey = key;
-    enrollFetchPromise = (async () => {
-      try {
-        const token = await getAuthToken();
-        if (!token) {
-          handleUnauthorized();
-          return;
-        }
-        const enrollList = await apiGet("/api/me/enrollments", { silent: true, timeout: 4000, tolerateTimeout: true });
-        if (!enrollList) {
-          if (attempt < 2) {
-            setTimeout(() => loadEnrollmentsFor(u, attempt + 1), 4000 * (attempt + 1));
-          }
-          return;
-        }
-        setEnrollments(enrollList || []);
-        cacheEnrollments(u, enrollList || []);
-        rerenderVisible();
-      } catch (e) {
-        console.error("enrollments fetch failed", e);
-      } finally {
-        enrollFetchPromise = null;
-      }
-    })();
-    return enrollFetchPromise;
-  };
-
   // 원격 수강 정보 (캐시로 먼저 렌더, 백그라운드 갱신)
   if (user) {
-    loadEnrollmentsFor(user);
+    fetchEnrollmentsForUser(user).then(() => rerenderVisible());
   }
 
   // 세션 동기화 완료 후 내비/페이지 재반영
@@ -1887,7 +1918,8 @@ async function ensureSeedData() {
       const u = getUser();
       if (u) {
         try {
-          await loadEnrollmentsFor(u);
+          await fetchEnrollmentsForUser(u, 0, { force: true });
+          rerenderVisible();
         } catch (e) {
           console.error("enrollments fetch failed (late)", e);
         }

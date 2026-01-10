@@ -410,7 +410,12 @@ async function loadClassDetailPage() {
     }
 
     if (user.role === "student") {
-      if (!e) return { state: "student_not_enrolled", e: null, active: false, endText: "-" };
+      const enrollReady = (typeof isEnrollmentsSynced === "function") ? isEnrollmentsSynced() : true;
+      const enrollSyncing = (typeof isEnrollmentsSyncing === "function") ? isEnrollmentsSyncing() : false;
+      if (!e) {
+        if (!enrollReady || enrollSyncing) return { state: "student_pending", e: null, active: false, endText: "-" };
+        return { state: "student_not_enrolled", e: null, active: false, endText: "-" };
+      }
       const endT = parseEndTime(e);
       const endText = endT ? fmtDateKR(endT) : (e.endDate || "-");
       const active = isEnrollmentActiveForUser(user, c.id);
@@ -441,6 +446,16 @@ function ensureProtectedData() {
     if (!isDetailPageActive()) return;
     const user = getUser();
     const status = getEnrollStatusForUI(user);
+    if (status.state === "student_pending") {
+      if (typeof fetchEnrollmentsForUser === "function" && user) {
+        const syncing = (typeof isEnrollmentsSyncing === "function") ? isEnrollmentsSyncing() : false;
+        if (!syncing) {
+          fetchEnrollmentsForUser(user, 0, { force: true })
+            .then(() => { if (isDetailPageActive()) refreshGates(); })
+            .catch(() => {});
+        }
+      }
+    }
 
     const enterBtns = getDetailEnterButtons();
     enterBtns.forEach(btn => {
@@ -467,6 +482,11 @@ function ensureProtectedData() {
       if (status.state === "student_expired") {
         setGateDisabled(btn, true);
         btn.textContent = "만료 (재수강 후 입장)";
+        return;
+      }
+      if (status.state === "student_pending") {
+        setGateDisabled(btn, true);
+        btn.textContent = "수강 확인중...";
         return;
       }
       if (status.state === "student_not_enrolled") {
@@ -496,6 +516,10 @@ function ensureProtectedData() {
         buyBtn.textContent = "재수강 결제하기";
         setGateDisabled(buyBtn, false);
         if (teacherHint) teacherHint.style.display = "none";
+      } else if (status.state === "student_pending") {
+        buyBtn.textContent = "수강 상태 확인중...";
+        setGateDisabled(buyBtn, true);
+        if (teacherHint) teacherHint.style.display = "none";
       } else if (status.state === "student_not_enrolled") {
         buyBtn.textContent = buyBtnDefaultText;
         setGateDisabled(buyBtn, false);
@@ -511,6 +535,8 @@ function ensureProtectedData() {
     if (enrollStateText) {
       if (status.state === "guest") {
         enrollStateText.textContent = "로그인 후 수강 등록하면 라이브/다시보기가 열립니다.";
+      } else if (status.state === "student_pending") {
+        enrollStateText.textContent = "수강 상태를 확인중입니다. 잠시만 기다려 주세요.";
       } else if (status.state === "student_not_enrolled") {
         enrollStateText.textContent = "아직 수강 등록이 없습니다. 결제 후 라이브/다시보기가 열립니다.";
       } else if (status.state === "student_active") {

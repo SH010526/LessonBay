@@ -8,6 +8,20 @@ function loadStudentDashboard() {
     if (!user) { navigateTo("login.html", { replace: true }); return; }
     if (user.role !== "student") { navigateTo("teacher_dashboard.html", { replace: true }); return; }
 
+    const enrollReady = (typeof isEnrollmentsSynced === "function") ? isEnrollmentsSynced() : true;
+    if (!enrollReady) {
+      wrap.innerHTML = `<p class="muted" style="margin-top:12px;">수강 정보를 확인중입니다. 잠시만 기다려 주세요.</p>`;
+      const syncing = (typeof isEnrollmentsSyncing === "function") ? isEnrollmentsSyncing() : false;
+      if (!syncing && typeof fetchEnrollmentsForUser === "function" && wrap.dataset.enrollFetch !== "1") {
+        wrap.dataset.enrollFetch = "1";
+        fetchEnrollmentsForUser(user, 0, { force: true })
+          .then(() => { if (document.body.contains(wrap)) loadStudentDashboard(); })
+          .catch(() => {})
+          .finally(() => { wrap.dataset.enrollFetch = "0"; });
+      }
+      return;
+    }
+
     let classes = getClasses();
     if (!classes.length) {
       try {
