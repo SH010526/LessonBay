@@ -81,25 +81,34 @@ async function apiHeaders() {
   return h;
 }
 
-function readSupabaseTokenFromStorage() {
+function readSupabaseSessionFromStorage(storage) {
   try {
-    if (typeof localStorage === "undefined") return "";
+    if (!storage) return null;
     const keys = [];
     if (SUPABASE_PROJECT_REF) keys.push(`sb-${SUPABASE_PROJECT_REF}-auth-token`);
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const k = localStorage.key(i);
+    for (let i = 0; i < storage.length; i += 1) {
+      const k = storage.key(i);
       if (!k || !k.startsWith("sb-") || !k.endsWith("-auth-token")) continue;
       if (!keys.includes(k)) keys.push(k);
     }
     for (const k of keys) {
-      const raw = localStorage.getItem(k);
+      const raw = storage.getItem(k);
       if (!raw) continue;
       const parsed = safeParse(raw, null);
-      const token = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.data?.session?.access_token || "";
-      if (token) return token;
+      if (!parsed) continue;
+      if (parsed.access_token || parsed.refresh_token) return parsed;
+      if (parsed.currentSession) return parsed.currentSession;
+      if (parsed.data?.session) return parsed.data.session;
     }
   } catch (_) {}
-  return "";
+  return null;
+}
+
+function readSupabaseTokenFromStorage() {
+  const session =
+    readSupabaseSessionFromStorage(typeof localStorage !== "undefined" ? localStorage : null) ||
+    readSupabaseSessionFromStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
+  return session?.access_token || "";
 }
 
 async function getAuthToken() {
@@ -111,7 +120,21 @@ async function getAuthToken() {
       token = data?.session?.access_token || "";
     } catch (_) {}
   }
-  if (!token) token = readSupabaseTokenFromStorage();
+  let storedSession = null;
+  if (!token) {
+    storedSession =
+      readSupabaseSessionFromStorage(typeof localStorage !== "undefined" ? localStorage : null) ||
+      readSupabaseSessionFromStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
+    token = storedSession?.access_token || "";
+  }
+  if (!token && storedSession?.refresh_token && supabaseClient?.auth?.refreshSession) {
+    try {
+      const { data } = await supabaseClient.auth.refreshSession({
+        refresh_token: storedSession.refresh_token,
+      });
+      token = data?.session?.access_token || "";
+    } catch (_) {}
+  }
   return token;
 }
 
