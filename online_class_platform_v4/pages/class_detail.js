@@ -260,52 +260,68 @@ async function loadClassDetailPage() {
     if (detailLoadCache.mats) return;
     detailLoadCache.mats = true;
     try {
-      const mats = await apiGet(`/api/classes/${encodeURIComponent(id)}/materials`, { silent: true }).catch(() => []);
+      const mats = await apiGet(`/api/classes/${encodeURIComponent(id)}/materials`, { silent: true, timeout: 4000, tolerateTimeout: true }).catch(() => null);
+      if (!mats) { detailLoadCache.mats = false; return; }
       if (!isDetailPageActive()) return;
       const map = getMaterials();
-      map[id] = mats || [];
+      map[id] = Array.isArray(mats) ? mats : [];
       setMaterials(map);
       renderMaterials();
-    } catch (e) { console.error("materials fetch failed", e); }
+    } catch (e) {
+      detailLoadCache.mats = false;
+      console.error("materials fetch failed", e);
+    }
   }
   async function fetchAssignmentsData() {
     if (!isDetailPageActive()) return;
     if (detailLoadCache.assigns) return;
     detailLoadCache.assigns = true;
     try {
-      const assigns = await apiGet(`/api/classes/${encodeURIComponent(id)}/assignments`, { silent: true }).catch(() => []);
+      const assigns = await apiGet(`/api/classes/${encodeURIComponent(id)}/assignments`, { silent: true, timeout: 4000, tolerateTimeout: true }).catch(() => null);
+      if (!assigns) { detailLoadCache.assigns = false; return; }
       if (!isDetailPageActive()) return;
       const map = getAssignments();
-      map[id] = assigns || [];
+      map[id] = Array.isArray(assigns) ? assigns : [];
       setAssignments(map);
       renderAssignments();
-    } catch (e) { console.error("assignments fetch failed", e); }
+    } catch (e) {
+      detailLoadCache.assigns = false;
+      console.error("assignments fetch failed", e);
+    }
   }
   async function fetchReviewsData() {
     if (!isDetailPageActive()) return;
     if (detailLoadCache.revs) return;
     detailLoadCache.revs = true;
     try {
-      const revs = await apiGet(`/api/classes/${encodeURIComponent(id)}/reviews`, { silent: true }).catch(() => []);
+      const revs = await apiGet(`/api/classes/${encodeURIComponent(id)}/reviews`, { silent: true, timeout: 4000, tolerateTimeout: true }).catch(() => null);
+      if (!revs) { detailLoadCache.revs = false; return; }
       if (!isDetailPageActive()) return;
       const map = getReviews();
-      map[id] = revs || [];
+      map[id] = Array.isArray(revs) ? revs : [];
       setReviews(map);
       renderReviews();
-    } catch (e) { console.error("reviews fetch failed", e); }
+    } catch (e) {
+      detailLoadCache.revs = false;
+      console.error("reviews fetch failed", e);
+    }
   }
   async function fetchQnaData() {
     if (!isDetailPageActive()) return;
     if (detailLoadCache.qnas) return;
     detailLoadCache.qnas = true;
     try {
-      const qnas = await apiGet(`/api/classes/${encodeURIComponent(id)}/qna`, { silent: true }).catch(() => []);
+      const qnas = await apiGet(`/api/classes/${encodeURIComponent(id)}/qna`, { silent: true, timeout: 4000, tolerateTimeout: true }).catch(() => null);
+      if (!qnas) { detailLoadCache.qnas = false; return; }
       if (!isDetailPageActive()) return;
       const map = getQna();
-      map[id] = qnas || [];
+      map[id] = Array.isArray(qnas) ? qnas : [];
       setQna(map);
       renderQna();
-    } catch (e) { console.error("qna fetch failed", e); }
+    } catch (e) {
+      detailLoadCache.qnas = false;
+      console.error("qna fetch failed", e);
+    }
   }
 
   const planWeekly = $("#planWeekly");

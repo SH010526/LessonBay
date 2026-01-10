@@ -21,6 +21,13 @@
 const SUPABASE_URL = "https://pqvdexhxytahljultmjd.supabase.co";   // Project URL
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxdmRleGh4eXRhaGxqdWx0bWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5NjMzNTMsImV4cCI6MjA4MTUzOTM1M30.WzJWY3-92Bwkic-Wb2rOmZ1joEUj-s69cSL2hPT79fQ";             // anon public key
 const STORAGE_BUCKET = "LessonBay"; // Supabase Storage 버킷 이름
+const SUPABASE_PROJECT_REF = (() => {
+  try {
+    return new URL(SUPABASE_URL).hostname.split(".")[0] || "";
+  } catch (_) {
+    return "";
+  }
+})();
 
 // ? SDK가 없는 페이지에서도 크래시 나지 않게 (전역 supabase와 이름 충돌 방지)
 let supabaseClient = null;
@@ -68,14 +75,44 @@ const dataCache = {
 
 // API helper
 async function apiHeaders() {
-  let token = "";
-  try {
-    const { data } = await supabaseClient.auth.getSession();
-    token = data?.session?.access_token || "";
-  } catch (_) {}
+  const token = await getAuthToken();
   const h = { "Content-Type": "application/json" };
   if (token) h.Authorization = `Bearer ${token}`;
   return h;
+}
+
+function readSupabaseTokenFromStorage() {
+  try {
+    if (typeof localStorage === "undefined") return "";
+    const keys = [];
+    if (SUPABASE_PROJECT_REF) keys.push(`sb-${SUPABASE_PROJECT_REF}-auth-token`);
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith("sb-") || !k.endsWith("-auth-token")) continue;
+      if (!keys.includes(k)) keys.push(k);
+    }
+    for (const k of keys) {
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const parsed = safeParse(raw, null);
+      const token = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.data?.session?.access_token || "";
+      if (token) return token;
+    }
+  } catch (_) {}
+  return "";
+}
+
+async function getAuthToken() {
+  ensureSupabaseClient();
+  let token = "";
+  if (supabaseClient?.auth?.getSession) {
+    try {
+      const { data } = await supabaseClient.auth.getSession();
+      token = data?.session?.access_token || "";
+    } catch (_) {}
+  }
+  if (!token) token = readSupabaseTokenFromStorage();
+  return token;
 }
 
 // 단순 로딩 오버레이
@@ -254,7 +291,7 @@ async function apiGet(path, opts = {}) {
     }, timeoutMs);
     if (!res.ok) {
       const txt = await res.text();
-      showToast(txt || "요청 실패", "danger");
+      if (!silent) showToast(txt || "요청 실패", "danger");
       throw new Error(txt);
     }
     return res.json();
