@@ -17,6 +17,7 @@
    - 세션 기반으로 localStorage(K.USER) 동기화해서
      기존 UI/권한 로직(teacher/student)을 그대로 살림
    ============================ */
+   // 렌더링 관련 코드는 
 
 const SUPABASE_URL = "https://pqvdexhxytahljultmjd.supabase.co";   // Project URL
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxdmRleGh4eXRhaGxqdWx0bWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5NjMzNTMsImV4cCI6MjA4MTUzOTM1M30.WzJWY3-92Bwkic-Wb2rOmZ1joEUj-s69cSL2hPT79fQ";             // anon public key
@@ -298,7 +299,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 1000) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal }); // abort signal 뜻 : 요청이 타임아웃되었을 때 요청을 중단하는 신호
-    //현재 타임아웃 시간은 
+    //현재 타임아웃 시간은 1000ms로 설정되어 있습니다. 이 값은 fetch 요청이 1초 이상 걸릴 경우 요청을 중단하도록 지정합니다.
   } finally {
     clearTimeout(timer);
   }
