@@ -185,19 +185,35 @@ function scheduleIdleTask(fn, timeout = 800) {
   return setTimeout(fn, Math.min(timeout, 300));
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 0) {
+  if (!timeoutMs) return fetch(url, options);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function apiGet(path, opts = {}) {
   const silent = !!opts.silent;
+  const timeoutMs = Number(opts.timeout) || 0;
+  const tolerateTimeout = !!opts.tolerateTimeout;
   if (!silent) showLoading();
   try {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
       headers: await apiHeaders(),
-    });
+    }, timeoutMs);
     if (!res.ok) {
       const txt = await res.text();
       showToast(txt || "요청 실패", "danger");
       throw new Error(txt);
     }
     return res.json();
+  } catch (e) {
+    if (e?.name === "AbortError" && tolerateTimeout) return null;
+    throw e;
   } finally {
     if (!silent) hideLoading();
   }
@@ -1574,11 +1590,17 @@ async function ensureSeedData() {
   rerenderVisible();
   updateNav();
 
-  // 원격 수업 목록 (지연 없이 즉시 시작)
-  if (!detailOnly) {
-    (async () => {
-      try {
-        const classes = await apiGet("/api/classes", { silent: true });
+  // 원격 수업 목록 (느린 응답이면 타임아웃 후 백그라운드 재시도)
+  const fetchClassesRemote = (attempt = 0) => {
+    const timeoutMs = attempt === 0 ? 4000 : 8000;
+    apiGet("/api/classes", { silent: true, timeout: timeoutMs, tolerateTimeout: true })
+      .then((classes) => {
+        if (!Array.isArray(classes) || !classes.length) {
+          if (attempt < 2) {
+            setTimeout(() => fetchClassesRemote(attempt + 1), 4000 * (attempt + 1));
+          }
+          return;
+        }
         const normalized = (classes || []).map(c => ({
           ...c,
           teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
@@ -1587,22 +1609,35 @@ async function ensureSeedData() {
         }));
         if (normalized.length) setClasses(normalized);
         rerenderVisible();
-      } catch (e) {
+      })
+      .catch((e) => {
+        if (attempt < 2) {
+          setTimeout(() => fetchClassesRemote(attempt + 1), 4000 * (attempt + 1));
+          return;
+        }
         console.error("classes fetch failed", e);
-      }
-    })();
+      });
+  };
+  if (!detailOnly) {
+    fetchClassesRemote(0);
   }
 
   let enrollFetchPromise = null;
   let enrollFetchKey = "";
-  const loadEnrollmentsFor = async (u) => {
+  const loadEnrollmentsFor = async (u, attempt = 0) => {
     const key = getUserCacheKey(u);
     if (!key) return;
     if (enrollFetchPromise && enrollFetchKey === key) return enrollFetchPromise;
     enrollFetchKey = key;
     enrollFetchPromise = (async () => {
       try {
-        const enrollList = await apiGet("/api/me/enrollments", { silent: true });
+        const enrollList = await apiGet("/api/me/enrollments", { silent: true, timeout: 4000, tolerateTimeout: true });
+        if (!enrollList) {
+          if (attempt < 2) {
+            setTimeout(() => loadEnrollmentsFor(u, attempt + 1), 4000 * (attempt + 1));
+          }
+          return;
+        }
         setEnrollments(enrollList || []);
         cacheEnrollments(u, enrollList || []);
         rerenderVisible();
