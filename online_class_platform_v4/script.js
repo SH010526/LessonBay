@@ -59,6 +59,7 @@ const API_BASE_URL = (() => {
 
 // In-memory caches (no localStorage/IndexedDB)
 let userCache = null;
+let __authInvalidated = false;
 const dataCache = {
   classes: [],
   enrollments: {},   // userKey -> classId -> record
@@ -321,6 +322,7 @@ async function apiGet(path, opts = {}) {
       headers: await apiHeaders(),
     }, timeoutMs);
     if (!res.ok) {
+      if (res.status === 401) handleUnauthorized();
       const txt = await res.text();
       if (!silent) showToast(txt || "요청 실패", "danger");
       throw new Error(txt);
@@ -343,6 +345,7 @@ async function apiPost(path, body) {
       body: JSON.stringify(body || {}),
     });
     if (res.ok) return res.json();
+    if (res.status === 401) handleUnauthorized();
 
     // 응답 본문은 한 번만 소비 가능하므로 text로 읽고 JSON 시도
     const raw = await res.text();
@@ -370,6 +373,7 @@ async function apiRequest(path, method = "GET", body = null) {
       body: body ? JSON.stringify(body) : undefined,
     });
     if (res.ok) return res.json();
+    if (res.status === 401) handleUnauthorized();
     const raw = await res.text();
     try {
       const data = raw ? JSON.parse(raw) : null;
@@ -640,14 +644,14 @@ async function syncLocalUserFromSupabaseSession() {
     const role = (roleMeta === "teacher" || roleMeta === "student" || roleMeta === "admin")
       ? roleMeta
       : "student";
-    userCache = { id: u.id, name, role, email };
+    setUser({ id: u.id, name, role, email });
     return true;
   };
   if (!supabaseClient || !supabaseClient.auth?.getSession) {
     const stored =
       readSupabaseSessionFromStorage(typeof localStorage !== "undefined" ? localStorage : null) ||
       readSupabaseSessionFromStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
-    if (!applySession(stored)) userCache = null;
+    if (!applySession(stored)) setUser(null);
     return;
   }
 
@@ -656,7 +660,7 @@ async function syncLocalUserFromSupabaseSession() {
     const session = sessionData?.session || null;
 
     if (!session || !session.user) {
-      userCache = null;
+      setUser(null);
       return;
     }
     applySession(session);
@@ -664,7 +668,7 @@ async function syncLocalUserFromSupabaseSession() {
     const stored =
       readSupabaseSessionFromStorage(typeof localStorage !== "undefined" ? localStorage : null) ||
       readSupabaseSessionFromStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
-    if (!applySession(stored)) userCache = null;
+    if (!applySession(stored)) setUser(null);
   }
 }
 
@@ -1432,7 +1436,10 @@ function getUserPassword(u) {
 }
 
 function getUser() { return userCache; }
-function setUser(u) { userCache = u || null; }
+function setUser(u) {
+  userCache = u || null;
+  if (userCache) __authInvalidated = false;
+}
 function getUsers() { return []; }
 function setUsers(_list) { /* no-op */ }
 
@@ -1789,6 +1796,11 @@ async function ensureSeedData() {
     enrollFetchKey = key;
     enrollFetchPromise = (async () => {
       try {
+        const token = await getAuthToken();
+        if (!token) {
+          handleUnauthorized();
+          return;
+        }
         const enrollList = await apiGet("/api/me/enrollments", { silent: true, timeout: 4000, tolerateTimeout: true });
         if (!enrollList) {
           if (attempt < 2) {
@@ -1853,6 +1865,36 @@ function clearOldAuthKeys() {
   localStorage.removeItem("CURRENT_USER");
 }
 
+function clearSupabaseSessionStorage(storage) {
+  try {
+    if (!storage) return;
+    const keys = new Set();
+    if (SUPABASE_PROJECT_REF) keys.add(`sb-${SUPABASE_PROJECT_REF}-auth-token`);
+    for (let i = 0; i < storage.length; i += 1) {
+      const k = storage.key(i);
+      if (!k) continue;
+      if (k.startsWith("sb-") && k.endsWith("-auth-token")) keys.add(k);
+      if (k.startsWith("supabase.auth")) keys.add(k);
+    }
+    keys.forEach((k) => storage.removeItem(k));
+  } catch (_) {}
+}
+
+function clearSupabaseSessions() {
+  clearSupabaseSessionStorage(typeof localStorage !== "undefined" ? localStorage : null);
+  clearSupabaseSessionStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
+}
+
+function handleUnauthorized() {
+  if (__authInvalidated) return;
+  __authInvalidated = true;
+  setUser(null);
+  clearSupabaseSessions();
+  clearOldAuthKeys();
+  updateNav();
+  showToast("세션이 만료되었습니다. 다시 로그인해 주세요.", "warn");
+}
+
 // ? Supabase 로그아웃 포함
 async function doLogout(goHome = true) {
   try {
@@ -1861,6 +1903,7 @@ async function doLogout(goHome = true) {
     }
   } catch (_) {}
 
+  clearSupabaseSessions();
   setUser(null);
   clearOldAuthKeys();
   if (goHome) navigateTo("index.html", { replace: true });
