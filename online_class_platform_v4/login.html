@@ -29,14 +29,14 @@
         <div class="h2">로그인</div>
         <div class="muted" style="margin-top:6px;">이메일/비밀번호로 로그인합니다.</div>
 
-        <form id="loginForm" style="margin-top:14px;" onsubmit="return false;">
+        <form id="loginForm" style="margin-top:14px;">
           <div class="field">
             <label>이메일</label>
-            <input id="liEmail" class="input" type="email" placeholder="you@example.com" />
+            <input id="liEmail" autocomplete="email" name="email" class="input" type="email" placeholder="you@example.com" />
           </div>
           <div class="field">
             <label>비밀번호</label>
-            <input id="liPass" class="input" type="password" placeholder="••••••••" />
+            <input id="liPass" autocomplete="current-password" name="password" class="input" type="password" placeholder="••••••••" />
           </div>
           <div style="margin-top:16px;">
             <button class="btn primary" style="width:100%;">로그인</button>
@@ -53,3 +53,4 @@
   <div class="footer">© 2025 LessonBay. All rights reserved.</div>
 </body>
 </html>
+

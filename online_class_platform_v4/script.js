@@ -44,6 +44,16 @@ function ensureSupabaseClient() {
 }
 ensureSupabaseClient();
 
+async function waitForSupabaseClient(timeoutMs = 3000, intervalMs = 120) {
+  const start = Date.now();
+  while (!supabaseClient && Date.now() - start < timeoutMs) {
+    ensureSupabaseClient();
+    if (supabaseClient) break;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return supabaseClient;
+}
+
 // OTP 백엔드 API
 const API_BASE_URL = (() => {
   if (typeof window !== "undefined" && window.location) {
@@ -414,6 +424,9 @@ const VOD_MEM = new Map(); // vodKey -> Blob
 
 async function uploadToSupabaseStorage(file, prefix = "uploads") {
   ensureSupabaseClient();
+  if (!supabaseClient) {
+    await waitForSupabaseClient(3000);
+  }
   if (!supabaseClient) throw new Error("Supabase SDK를 불러올 수 없습니다.");
   const safeName = (file.name || "file")
     .replace(/\s+/g, "_")
@@ -684,7 +697,10 @@ async function supabaseSignupWithEmailConfirm(name, email, password, role) {
 
 async function supabaseLogin(email, password) {
   ensureSupabaseClient();
-  if (!supabaseClient) throw new Error("Supabase SDK가 로드되지 않았습니다. (login.html에서 SDK 스크립트 순서를 확인하세요)");
+  if (!supabaseClient) {
+    await waitForSupabaseClient(3000);
+  }
+  if (!supabaseClient) throw new Error("Supabase SDK 로딩에 실패했습니다. 새로고침 후 다시 시도해 주세요.");
 
   const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
   if (error) {

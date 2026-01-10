@@ -29,18 +29,18 @@
         <div class="h2">회원가입</div>
         <div class="muted" style="margin-top:6px;">이름/이메일/비밀번호/역할을 설정합니다.</div>
 
-        <form id="signupForm" style="margin-top:14px;" onsubmit="return false;">
+        <form id="signupForm" style="margin-top:14px;">
           <div class="field">
             <label>이름</label>
-            <input id="suName" class="input" placeholder="이승훈" />
+            <input id="suName" autocomplete="name" name="name" class="input" placeholder="이승훈" />
           </div>
           <div class="field">
             <label>이메일</label>
-            <input id="suEmail" class="input" type="email" placeholder="you@example.com" />
+            <input id="suEmail" autocomplete="email" name="email" class="input" type="email" placeholder="you@example.com" />
           </div>
           <div class="field">
             <label>비밀번호</label>
-            <input id="suPass" class="input" type="password" placeholder="••••••••" />
+            <input id="suPass" autocomplete="new-password" name="password" class="input" type="password" placeholder="••••••••" />
           </div>
           <div class="field">
             <label>역할</label>
@@ -75,3 +75,4 @@
   <div class="footer">© 2025 LessonBay. All rights reserved.</div>
 </body>
 </html>
+
