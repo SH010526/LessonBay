@@ -1457,8 +1457,8 @@ function normalizeCurrentUserInStorage() { /* no-op: localStorage 미사용 */ }
 // ---------------------------
 // ? SEED
 // ---------------------------
-async function loadLocalSampleClasses() {
-  const builtin = [
+function getBuiltinClasses() {
+  return [
     {
       id: "c_demo_korean_1",
       title: "영어 회화 입문",
@@ -1480,6 +1480,10 @@ async function loadLocalSampleClasses() {
       thumb: "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1400&q=60",
     },
   ];
+}
+
+async function loadLocalSampleClasses() {
+  const builtin = getBuiltinClasses();
 
   try {
     const res = await fetch("data/classes.json", { cache: "no-cache" });
@@ -1502,11 +1506,32 @@ async function ensureSeedData() {
   const sessionPromise = syncLocalUserFromSupabaseSession().catch(() => {});
   const detailOnly = !!document.getElementById("detailRoot") && !document.getElementById("classGrid") && !document.getElementById("homePopular");
 
+  const rerenderVisible = () => {
+    if ($("#homePopular")) loadHomePopular();
+    if ($("#classGrid")) loadClassesPage();
+    if ($("#detailRoot")) loadClassDetailPage();
+    if ($("#createClassForm")) handleCreateClassPage();
+    if ($("#teacherDash")) loadTeacherDashboard();
+    if ($("#studentDash")) loadStudentDashboard();
+  };
+
   const cached = loadCachedClasses();
   if (cached.length) {
     setClasses(cached);
   } else if (!detailOnly) {
-    setClasses(await loadLocalSampleClasses());
+    const builtin = getBuiltinClasses();
+    if (builtin.length) setClasses(builtin);
+    scheduleIdleTask(async () => {
+      try {
+        const local = await loadLocalSampleClasses();
+        if (Array.isArray(local) && local.length) {
+          setClasses(local);
+          rerenderVisible();
+        }
+      } catch (e) {
+        console.error("local sample classes load failed", e);
+      }
+    });
   } else {
     setClasses([]);
   }
@@ -1521,15 +1546,6 @@ async function ensureSeedData() {
   } else {
     setEnrollments({});
   }
-
-  const rerenderVisible = () => {
-    if ($("#homePopular")) loadHomePopular();
-    if ($("#classGrid")) loadClassesPage();
-    if ($("#detailRoot")) loadClassDetailPage();
-    if ($("#createClassForm")) handleCreateClassPage();
-    if ($("#teacherDash")) loadTeacherDashboard();
-    if ($("#studentDash")) loadStudentDashboard();
-  };
 
   // 초기 데이터로 한 번 갱신
   rerenderVisible();
@@ -2141,6 +2157,7 @@ function loadHomePopular() {
 
   const classes = getClasses();
   const top = classes.slice(0, 6);
+  if (!top.length) return;
 
   wrap.innerHTML = top.map(c => renderClassCard(c)).join("");
 
