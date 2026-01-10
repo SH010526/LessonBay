@@ -2947,6 +2947,14 @@ function ensureProtectedData() {
         return "첨부 파일";
       }
     };
+    const buildExistingFile = (submission) => {
+      const fileVal = submission?.fileData || submission?.fileUrl || "";
+      if (!fileVal) return null;
+      return {
+        name: submission?.fileName || inferFileName(fileVal) || "첨부 파일",
+        data: fileVal
+      };
+    };
     fileEl?.addEventListener("change", () => {
       const f = fileEl.files?.[0] || null;
       if (f) {
@@ -3262,11 +3270,7 @@ function ensureProtectedData() {
       if (sel && myAssign.assignId) sel.value = myAssign.assignId;
       const txt = document.getElementById("assignText");
       if (txt) txt.value = myAssign.content || myAssign.text || "";
-      const fileVal = myAssign.fileData || myAssign.fileUrl || "";
-      assignExistingFile = fileVal ? {
-        name: myAssign.fileName || inferFileName(fileVal),
-        data: fileVal
-      } : null;
+      assignExistingFile = buildExistingFile(myAssign);
       if (fileEl) fileEl.value = "";
       if (assignExistingFile) {
         renderFilePreview(`${assignExistingFile.name} (기존 첨부)`, () => { assignExistingFile = null; });
@@ -3284,6 +3288,9 @@ function ensureProtectedData() {
       if (formWrap) {
         formWrap.dataset.editing = showForm ? "1" : "0";
         formWrap.style.display = showForm ? "block" : "none";
+      }
+      if (showForm && myAssign && !assignExistingFile) {
+        assignExistingFile = buildExistingFile(myAssign);
       }
       toggleStudentFields(showForm);
       if (!showForm) renderFilePreview("");
