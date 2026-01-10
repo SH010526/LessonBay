@@ -1871,9 +1871,10 @@ function init() {
   normalizeCurrentUserInStorage(); // 핵심
   installGateBlockerOnce();        // <a> disabled blocking
 
-  scheduleAfterPaint(() => {
-    bootPageScripts();
+  // 페이지 스크립트는 즉시 로드 시도 (softNavigate 이후에도 동작 보장)
+  bootPageScripts();
 
+  scheduleAfterPaint(() => {
     // 네트워크 핸드셰이크 단축 (Supabase/Livekit/jsdelivr)
     (function injectPreconnects() {
       const origins = [
