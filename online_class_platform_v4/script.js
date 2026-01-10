@@ -185,6 +185,53 @@ function scheduleIdleTask(fn, timeout = 800) {
   return setTimeout(fn, Math.min(timeout, 300));
 }
 
+const PAGE_SCRIPTS = [
+  { selector: "#homePopular", fn: "loadHomePopular", src: "pages/home.js" },
+  { selector: "#classGrid", fn: "loadClassesPage", src: "pages/classes.js" },
+  { selector: "#detailRoot", fn: "loadClassDetailPage", src: "pages/class_detail.js" },
+  { selector: "#createClassForm", fn: "handleCreateClassPage", src: "pages/create_class.js" },
+  { selector: "#loginForm", fn: "handleLoginPage", src: "pages/auth.js" },
+  { selector: "#signupForm", fn: "handleSignupPage", src: "pages/auth.js" },
+  { selector: "#settingsRoot", fn: "handleSettingsPage", src: "pages/settings.js" },
+  { selector: "#teacherDash", fn: "loadTeacherDashboard", src: "pages/teacher_dashboard.js" },
+  { selector: "#studentDash", fn: "loadStudentDashboard", src: "pages/student_dashboard.js" },
+  { selector: "#liveRoot", fn: "loadLivePage", src: "pages/live_class.js" },
+];
+const __pageScriptPromises = {};
+
+function loadPageScript(src) {
+  if (!src || typeof document === "undefined") return Promise.reject(new Error("no src"));
+  if (__pageScriptPromises[src]) return __pageScriptPromises[src];
+  __pageScriptPromises[src] = new Promise((resolve, reject) => {
+    if (document.querySelector(`script[data-page-src="${src}"]`)) {
+      resolve();
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = src;
+    s.defer = true;
+    s.setAttribute("data-page-src", src);
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`page script load failed: ${src}`));
+    (document.head || document.body || document.documentElement).appendChild(s);
+  });
+  return __pageScriptPromises[src];
+}
+
+function bootPageScripts() {
+  if (typeof document === "undefined") return;
+  PAGE_SCRIPTS.forEach((p) => {
+    if (!p.selector || !p.fn || !p.src) return;
+    if (!document.querySelector(p.selector)) return;
+    if (typeof window[p.fn] === "function") return;
+    loadPageScript(p.src)
+      .then(() => {
+        if (typeof window[p.fn] === "function") window[p.fn]();
+      })
+      .catch((err) => console.error(err));
+  });
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 0) {
   if (!timeoutMs) return fetch(url, options);
   const controller = new AbortController();
@@ -1825,6 +1872,8 @@ function init() {
   installGateBlockerOnce();        // <a> disabled blocking
 
   scheduleAfterPaint(() => {
+    bootPageScripts();
+
     // 네트워크 핸드셰이크 단축 (Supabase/Livekit/jsdelivr)
     (function injectPreconnects() {
       const origins = [
