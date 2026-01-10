@@ -153,6 +153,38 @@ function hideLoading() {
   if (el && loadingCount === 0) el.style.display = "none";
 }
 
+function scheduleAfterPaint(fn) {
+  if (typeof fn !== "function") return;
+  if (typeof window === "undefined") {
+    fn();
+    return;
+  }
+  const run = () => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setTimeout(fn, 0);
+        });
+      });
+    } else {
+      setTimeout(fn, 0);
+    }
+  };
+  if (document.readyState === "complete" || document.readyState === "interactive") {
+    run();
+  } else {
+    window.addEventListener("DOMContentLoaded", run, { once: true });
+  }
+}
+
+function scheduleIdleTask(fn, timeout = 800) {
+  if (typeof fn !== "function") return null;
+  if (typeof requestIdleCallback === "function") {
+    return requestIdleCallback(() => fn(), { timeout });
+  }
+  return setTimeout(fn, Math.min(timeout, 300));
+}
+
 async function apiGet(path, opts = {}) {
   const silent = !!opts.silent;
   if (!silent) showLoading();
@@ -709,14 +741,6 @@ const PAGE_HTML_CACHE_TTL_MS = 1000 * 60 * 5; // 5분 캐시
 
 function sleep(ms = 0) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function scheduleIdleTask(fn, timeout = 800) {
-  if (typeof fn !== "function") return null;
-  if (typeof requestIdleCallback === "function") {
-    return requestIdleCallback(() => fn(), { timeout });
-  }
-  return setTimeout(fn, Math.min(timeout, 300));
 }
 
 function isHttpLike(u) {
@@ -4882,53 +4906,56 @@ function init() {
   normalizeCurrentUserInStorage(); // ? 핵심
   installGateBlockerOnce();        // ? <a> disabled blocking
 
-  // 네트워크 핸드셰이크 단축 (Supabase/Livekit/jsdelivr)
-  (function injectPreconnects() {
-    const origins = [
-      "https://cdn.jsdelivr.net",
-      SUPABASE_URL,
-      SUPABASE_URL.replace("https://", "https://*."),
-      "https://*.livekit.cloud",
-    ];
-    const head = document.head || document.getElementsByTagName("head")[0];
-    origins.forEach((o) => {
-      if (!o || document.querySelector(`link[data-preconnect="${o}"]`)) return;
-      const l1 = document.createElement("link");
-      l1.rel = "preconnect";
-      l1.href = o;
-      l1.setAttribute("data-preconnect", o);
-      const l2 = document.createElement("link");
-      l2.rel = "dns-prefetch";
-      l2.href = o;
-      l2.setAttribute("data-preconnect", o + ":dns");
-      head.appendChild(l1);
-      head.appendChild(l2);
-    });
-  })();
+  scheduleAfterPaint(() => {
+    // 네트워크 핸드셰이크 단축 (Supabase/Livekit/jsdelivr)
+    (function injectPreconnects() {
+      const origins = [
+        "https://cdn.jsdelivr.net",
+        SUPABASE_URL,
+        SUPABASE_URL.replace("https://", "https://*."),
+        "https://*.livekit.cloud",
+      ];
+      const head = document.head || document.getElementsByTagName("head")[0];
+      origins.forEach((o) => {
+        if (!o || document.querySelector(`link[data-preconnect="${o}"]`)) return;
+        const l1 = document.createElement("link");
+        l1.rel = "preconnect";
+        l1.href = o;
+        l1.setAttribute("data-preconnect", o);
+        const l2 = document.createElement("link");
+        l2.rel = "dns-prefetch";
+        l2.href = o;
+        l2.setAttribute("data-preconnect", o + ":dns");
+        head.appendChild(l1);
+        head.appendChild(l2);
+      });
+    })();
 
-  // NAV 먼저 렌더하여 느린 API 때문에 UI가 비지 않도록 함
-  updateNav();
-  runReveal();
-  prefetchCorePages();
-  bindNavPrefetch();
-  bindSoftNavigation();
-  warmupBackend();
+    // NAV 먼저 렌더하여 느린 API 때문에 UI가 비지 않도록 함
+    updateNav();
+    runReveal();
+    prefetchCorePages();
+    bindNavPrefetch();
+    bindSoftNavigation();
+    warmupBackend();
 
-  // 화면 즉시 렌더, 데이터는 백그라운드
-  if ($("#homePopular")) loadHomePopular();
-  if ($("#classGrid")) loadClassesPage();
-  if ($("#createClassForm")) handleCreateClassPage();
-  if ($("#loginForm")) handleLoginPage();
-  if ($("#signupForm")) handleSignupPage();
-  if ($("#settingsRoot")) handleSettingsPage();
-  if ($("#teacherDash")) loadTeacherDashboard();
-  if ($("#studentDash")) loadStudentDashboard();
-  if ($("#liveRoot")) loadLivePage();
+    // 화면 즉시 렌더, 데이터는 백그라운드
+    if ($("#homePopular")) loadHomePopular();
+    if ($("#classGrid")) loadClassesPage();
+    if ($("#createClassForm")) handleCreateClassPage();
+    if ($("#loginForm")) handleLoginPage();
+    if ($("#signupForm")) handleSignupPage();
+    if ($("#settingsRoot")) handleSettingsPage();
+    if ($("#teacherDash")) loadTeacherDashboard();
+    if ($("#studentDash")) loadStudentDashboard();
+    if ($("#liveRoot")) loadLivePage();
 
-  ensureSeedData();
+    ensureSeedData();
 
-  if (getPath() === "logout.html") doLogout(true);
+    if (getPath() === "logout.html") doLogout(true);
+  });
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
 
