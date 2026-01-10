@@ -292,12 +292,13 @@ function bootPageScripts() {
   });
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 0) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 1000) {
   if (!timeoutMs) return fetch(url, options);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, { ...options, signal: controller.signal }); // abort signal 뜻 : 요청이 타임아웃되었을 때 요청을 중단하는 신호
+    //현재 타임아웃 시간은 
   } finally {
     clearTimeout(timer);
   }

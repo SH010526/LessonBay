@@ -771,6 +771,12 @@ app.get("/api/me/enrollments", requireAuth, async (req, res) => {
 app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
   try {
     const classId = req.params.id;
+    const cacheKey = `replays:${classId}:u:${req.user.id}:r:${req.user.role}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      setCacheHeaders(res, 15, 60);
+      return res.json(cached);
+    }
     // RLS가 켜져 있으면 삽입이 막히므로 비활성화 시도
     if (!replayRlsDisabled) {
       await disableRlsIfOn();
@@ -804,6 +810,8 @@ app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
       ...r,
       hasVod: true, // vodUrl 컬럼이 필수라 재생 가능 여부를 빠르게 알 수 있음
     }));
+    cacheSet(cacheKey, list, 15 * 1000);
+    setCacheHeaders(res, 15, 60);
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -934,6 +942,12 @@ app.post("/api/classes/:id/materials", requireAuth, requireTeacher, async (req, 
 app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
   try {
     const classId = req.params.id;
+    const cacheKey = `assign:${classId}:u:${req.user.id}:r:${req.user.role}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      setCacheHeaders(res, 10, 40);
+      return res.json(cached);
+    }
     const access = await ensureClassAccess(req, classId);
     if (access.error) return res.status(404).json({ error: access.error });
     if (!access.isTeacher && !access.isActiveStudent) {
@@ -969,6 +983,8 @@ app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
         })),
       };
     });
+    cacheSet(cacheKey, list, 10 * 1000);
+    setCacheHeaders(res, 10, 40);
     res.json(list);
   } catch (err) {
     console.error(err);
