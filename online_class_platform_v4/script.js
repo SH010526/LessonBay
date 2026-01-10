@@ -81,7 +81,7 @@ function loadSupabaseSdkOnce() {
   return __supabaseSdkPromise;
 }
 
-async function waitForSupabaseClient(timeoutMs = 3000, intervalMs = 120) {
+async function waitForSupabaseClient(timeoutMs = 8000, intervalMs = 150) {
   const start = Date.now();
   if (!supabaseClient) {
     try { await loadSupabaseSdkOnce(); } catch (_) {}
@@ -465,7 +465,7 @@ const VOD_MEM = new Map(); // vodKey -> Blob
 async function uploadToSupabaseStorage(file, prefix = "uploads") {
   ensureSupabaseClient();
   if (!supabaseClient) {
-    await waitForSupabaseClient(3000);
+    await waitForSupabaseClient(8000);
   }
   if (!supabaseClient) throw new Error("Supabase SDK를 불러올 수 없습니다.");
   const safeName = (file.name || "file")
@@ -738,7 +738,7 @@ async function supabaseSignupWithEmailConfirm(name, email, password, role) {
 async function supabaseLogin(email, password) {
   ensureSupabaseClient();
   if (!supabaseClient) {
-    await waitForSupabaseClient(3000);
+    await waitForSupabaseClient(8000);
   }
   if (!supabaseClient) throw new Error("Supabase SDK 로딩에 실패했습니다. 새로고침 후 다시 시도해 주세요.");
 
@@ -2110,6 +2110,13 @@ function init() {
         head.appendChild(l2);
       });
     })();
+
+    // 로그인/회원가입 페이지는 SDK를 먼저 로드해 실패 확률을 낮춤
+    if ($("#loginForm") || $("#signupForm")) {
+      loadSupabaseSdkOnce()
+        .then(() => { ensureSupabaseClient(); })
+        .catch(() => {});
+    }
 
     // NAV 먼저 렌더하여 느린 API 때문에 UI가 비지 않도록 함
     updateNav();
