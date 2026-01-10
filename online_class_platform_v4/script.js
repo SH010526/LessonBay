@@ -3236,6 +3236,16 @@ function ensureProtectedData() {
     if (!isOwnerTeacher) {
       // 학생 화면: 선택된 과제 기준으로 본인 제출만 보여주기
       if (myAssign) {
+      const scoreVal = (myAssign.score ?? "") === "" || myAssign.score === null ? null : myAssign.score;
+      const feedbackVal = myAssign.feedback || "";
+      const gradedLine = (scoreVal !== null || feedbackVal)
+        ? `<div class="session-sub" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <span class="chip" style="padding:4px 8px;">점수</span>
+            <strong>${scoreVal === null ? "미입력" : `${escapeHtml(scoreVal)}점`}</strong>
+            <span class="chip" style="padding:4px 8px;">코멘트</span>
+            <span>${feedbackVal ? escapeHtml(feedbackVal) : "미입력"}</span>
+          </div>`
+        : `<div class="session-sub" style="color:rgba(15,23,42,.6);">채점 대기 중입니다.</div>`;
       list.innerHTML = `
         <div class="muted" style="margin-bottom:6px;">제출한 과제는 선생님만 확인할 수 있습니다.</div>
         <div class="session-item" style="border-left:3px solid rgba(109,94,252,.35);">
@@ -3244,6 +3254,7 @@ function ensureProtectedData() {
             <span class="chip" style="background:rgba(109,94,252,.14);">내 제출</span>
           </div>
           <div class="session-sub">제출: ${new Date(myAssign.submittedAt || myAssign.at).toLocaleString("ko-KR")}${myAssign.updatedAt ? ` / 수정: ${new Date(myAssign.updatedAt).toLocaleString("ko-KR")}` : ""}</div>
+          ${gradedLine}
           <div class="session-sub" style="white-space:pre-wrap;">${escapeHtml(myAssign.text || "")}</div>
           ${myAssign.url ? `<div class="session-sub"><a href="${escapeAttr(myAssign.url)}" target="_blank">링크 열기</a></div>` : ``}
           ${(() => {
