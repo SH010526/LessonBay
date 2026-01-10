@@ -111,6 +111,42 @@ app.get("/api/health", (_req, res) => {
 const PORT = process.env.PORT || 3000;
 const kickedMap = new Map(); // classId -> Map<userId, expiresAt>
 const responseCache = new Map(); // key -> { value, expiresAt }
+const CLASS_LIST_CACHE_TTL_MS = 5 * 60 * 1000;
+const CLASS_DETAIL_CACHE_TTL_MS = 2 * 60 * 1000;
+const STORAGE_SIGN_CACHE_TTL_MS = 20 * 60 * 1000;
+const CLASS_SUMMARY_SELECT = {
+  id: true,
+  title: true,
+  category: true,
+  description: true,
+  weeklyPrice: true,
+  monthlyPrice: true,
+  thumbUrl: true,
+  teacherId: true,
+  createdAt: true,
+  teacher: { select: { id: true, name: true } },
+};
+
+function buildClassDetailSelect(includeReplays) {
+  if (!includeReplays) {
+    return { ...CLASS_SUMMARY_SELECT, updatedAt: true };
+  }
+  return {
+    ...CLASS_SUMMARY_SELECT,
+    updatedAt: true,
+    replays: {
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        classId: true,
+        sessionId: true,
+        title: true,
+        mime: true,
+        createdAt: true,
+      },
+    },
+  };
+}
 
 function cacheGet(key) {
   const hit = responseCache.get(key);
@@ -597,19 +633,23 @@ app.post("/api/account/delete", requireAuth, async (req, res) => {
 });
 
 // Classes
-app.get("/api/classes", async (_req, res) => {
+app.get("/api/classes", async (req, res) => {
   try {
-    const cached = cacheGet("classes:list");
+    const limitRaw = Number(req.query.limit);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 0;
+    const cacheKey = `classes:list:${limit || "all"}`;
+    const cached = cacheGet(cacheKey);
     if (cached) {
-      setCacheHeaders(res, 60, 300);
+      setCacheHeaders(res, 300, 600);
       return res.json(cached);
     }
     const list = await prisma.class.findMany({
       orderBy: { createdAt: "desc" },
-      include: { teacher: true },
+      ...(limit ? { take: limit } : {}),
+      select: CLASS_SUMMARY_SELECT,
     });
-    cacheSet("classes:list", list, 60 * 1000);
-    setCacheHeaders(res, 60, 300);
+    cacheSet(cacheKey, list, CLASS_LIST_CACHE_TTL_MS);
+    setCacheHeaders(res, 300, 600);
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -619,22 +659,20 @@ app.get("/api/classes", async (_req, res) => {
 
 app.get("/api/classes/:id", async (req, res) => {
   try {
-    const cacheKey = `classes:detail:${req.params.id}`;
+    const includeReplays = ["1", "true", "yes"].includes(String(req.query.includeReplays || "").toLowerCase());
+    const cacheKey = `classes:detail:${req.params.id}:${includeReplays ? "replays" : "base"}`;
     const cached = cacheGet(cacheKey);
     if (cached) {
-      setCacheHeaders(res, 60, 300);
+      setCacheHeaders(res, 120, 300);
       return res.json(cached);
     }
     const cls = await prisma.class.findUnique({
       where: { id: req.params.id },
-      include: {
-        teacher: true,
-        replays: { orderBy: { createdAt: "desc" } },
-      },
+      select: buildClassDetailSelect(includeReplays),
     });
     if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
-    cacheSet(cacheKey, cls, 60 * 1000);
-    setCacheHeaders(res, 60, 300);
+    cacheSet(cacheKey, cls, CLASS_DETAIL_CACHE_TTL_MS);
+    setCacheHeaders(res, 120, 300);
     res.json(cls);
   } catch (err) {
     console.error(err);
@@ -673,7 +711,7 @@ app.post("/api/classes", requireAuth, requireTeacher, async (req, res) => {
         teacherId: req.user.id,
       },
     });
-    cacheDel("classes:list");
+    cacheDelPrefix("classes:list");
     res.status(201).json(cls);
   } catch (err) {
     console.error("class create error:", err);
@@ -709,8 +747,8 @@ app.delete("/api/classes/:id", requireAuth, async (req, res) => {
       prisma.session.deleteMany({ where: { classId } }),
       prisma.class.delete({ where: { id: classId } }),
     ]);
-    cacheDel("classes:list");
-    cacheDel(`classes:detail:${classId}`);
+    cacheDelPrefix("classes:list");
+    cacheDelPrefix(`classes:detail:${classId}:`);
     cacheDelPrefix(`replays:${classId}:`);
     cacheDelPrefix(`assign:${classId}:`);
     cacheDelPrefix("enroll:");
@@ -1216,12 +1254,21 @@ app.get("/api/storage/sign", async (req, res) => {
     if (!allowedPrefixes.has(prefix)) {
       return res.status(400).json({ error: "path not allowed" });
     }
+    const cacheKey = `storage:sign:${bucket}:${cleanPath}:${download || ""}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      setCacheHeaders(res, 1200, 3600);
+      return res.json(cached);
+    }
     const opts = download ? { download } : undefined;
     const { data, error } = await supabase.storage.from(bucket).createSignedUrl(cleanPath, 60 * 60 * 24, opts);
     if (error) {
       return res.status(400).json({ error: "sign failed", detail: error.message || String(error) });
     }
-    res.json({ signedUrl: data?.signedUrl || null });
+    const payload = { signedUrl: data?.signedUrl || null };
+    cacheSet(cacheKey, payload, STORAGE_SIGN_CACHE_TTL_MS);
+    setCacheHeaders(res, 1200, 3600);
+    res.json(payload);
   } catch (err) {
     console.error("storage sign error:", err);
     res.status(500).json({ error: "storage sign failed" });
