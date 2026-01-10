@@ -659,6 +659,26 @@ const OLD_USER_KEYS = ["currentUser", "LessonBay_currentUser", "user", "authUser
 const OLD_USERS_KEYS = ["users", "LessonBay_users"];
 const OLD_CLASSES_KEYS = ["classes", "LessonBay_classes", "classData"];
 const OLD_ENROLL_KEYS = ["enrollments", "LessonBay_enrollments"];
+const HTML_ROUTE_BASES = new Set([
+  "index",
+  "classes",
+  "class_detail",
+  "live_class",
+  "teacher_dashboard",
+  "student_dashboard",
+  "create_class",
+  "settings",
+  "login",
+  "signup",
+  "logout",
+  "privacy",
+  "pay_success",
+  "pay_fail",
+]);
+const HTML_QUERY_IGNORED = new Set([
+  "class_detail",
+  "live_class",
+]);
 
 // 과제 선택 유지용 임시 변수
 let assignPendingSelect = null;
@@ -671,8 +691,10 @@ function safeParse(json, fallback) {
 }
 function won(n) { return "\u20A9" + (Number(n) || 0).toLocaleString("ko-KR"); }
 function getPath() {
-  const p = location.pathname.split("/").pop();
-  return p || "index.html";
+  const raw = location.pathname.split("/").filter(Boolean).pop() || "index";
+  if (raw.endsWith(".html")) return raw;
+  if (HTML_ROUTE_BASES.has(raw)) return `${raw}.html`;
+  return raw || "index.html";
 }
 function getParam(name) { return new URLSearchParams(location.search).get(name); }
 const LAST_CLASS_KEY = "lessonbay:lastClassId";
@@ -852,9 +874,29 @@ function prefetchPage(href) {
   prefetchPageHtml(url);
 }
 
-function pageHtmlCacheKey(url) {
+function normalizePageHtmlUrl(url) {
   try {
     const u = new URL(url, location.href);
+    const cleanPath = u.pathname.replace(/\/+$/, "") || "/";
+    if (cleanPath === "/") {
+      u.pathname = "/index.html";
+      return u.toString();
+    }
+    const parts = cleanPath.split("/").filter(Boolean);
+    const base = (parts[0] || "").replace(/\.html$/i, "");
+    if (HTML_ROUTE_BASES.has(base)) {
+      u.pathname = `/${base}.html`;
+      if (HTML_QUERY_IGNORED.has(base)) u.search = "";
+    }
+    return u.toString();
+  } catch (_) {
+    return url;
+  }
+}
+
+function pageHtmlCacheKey(url) {
+  try {
+    const u = new URL(normalizePageHtmlUrl(url), location.href);
     return `pagehtml:${u.pathname}${u.search || ""}`;
   } catch (_) {
     return `pagehtml:${url}`;
@@ -884,21 +926,23 @@ function setCachedPageHtml(url, html) {
 }
 
 async function fetchPageHtml(url) {
-  const cached = getCachedPageHtml(url);
+  const normalized = normalizePageHtmlUrl(url);
+  const cached = getCachedPageHtml(normalized);
   if (cached) return cached;
-  const res = await fetch(url, { headers: { "X-Requested-With": "fetch" } });
+  const res = await fetch(normalized, { headers: { "X-Requested-With": "fetch" } });
   if (!res.ok) throw new Error(`page fetch failed: ${res.status}`);
   const html = await res.text();
-  setCachedPageHtml(url, html);
+  setCachedPageHtml(normalized, html);
   return html;
 }
 
 function prefetchPageHtml(url) {
   if (!url || typeof fetch === "undefined") return;
-  if (getCachedPageHtml(url)) return;
-  fetch(url, { headers: { "X-Requested-With": "fetch" } })
+  const normalized = normalizePageHtmlUrl(url);
+  if (getCachedPageHtml(normalized)) return;
+  fetch(normalized, { headers: { "X-Requested-With": "fetch" } })
     .then((res) => (res.ok ? res.text() : null))
-    .then((html) => { if (html) setCachedPageHtml(url, html); })
+    .then((html) => { if (html) setCachedPageHtml(normalized, html); })
     .catch(() => {});
 }
 
@@ -1009,8 +1053,11 @@ function isSameOrigin(url) {
 function isHtmlRoute(url) {
   try {
     const u = new URL(url, location.href);
-    const p = u.pathname.toLowerCase();
-    return p.endsWith(".html") || p === "/" || p === "";
+    const p = u.pathname.toLowerCase().replace(/\/+$/, "");
+    if (!p || p === "/") return true;
+    if (p.endsWith(".html")) return true;
+    const base = p.split("/").filter(Boolean)[0] || "";
+    return HTML_ROUTE_BASES.has(base);
   } catch (_) {
     return false;
   }
