@@ -875,6 +875,7 @@ function getPath() {
 function getParam(name) { return new URLSearchParams(location.search).get(name); }
 const LAST_CLASS_KEY = "lessonbay:lastClassId";
 const CLASS_CACHE_KEY = "lessonbay:classCacheV1";
+const CLASS_DETAIL_CACHE_KEY = "lessonbay:classDetailCacheV1";
 const PREFETCH_CLASS_KEY = "lessonbay:prefetchClassV1";
 const ENROLL_CACHE_KEY = "lessonbay:enrollCacheV1";
 const CACHE_TTL_MS = 1000 * 60 * 10; // 10분 캐시
@@ -989,6 +990,33 @@ function loadCachedClasses() {
     return parsed.list;
   } catch (_) {
     return [];
+  }
+}
+
+function cacheClassDetail(cls) {
+  const slim = slimClassForCache(cls);
+  if (!slim) return;
+  try {
+    const raw = sessionStorage.getItem(CLASS_DETAIL_CACHE_KEY);
+    const parsed = safeParse(raw, { map: {} }) || { map: {} };
+    const map = parsed.map && typeof parsed.map === "object" ? parsed.map : {};
+    map[slim.id] = { at: Date.now(), data: slim };
+    sessionStorage.setItem(CLASS_DETAIL_CACHE_KEY, JSON.stringify({ map }));
+  } catch (_) {}
+}
+
+function loadCachedClassDetail(id) {
+  if (!id) return null;
+  try {
+    const raw = sessionStorage.getItem(CLASS_DETAIL_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = safeParse(raw, null);
+    const entry = parsed?.map?.[id];
+    if (!entry?.data) return null;
+    if (entry.at && Date.now() - entry.at > CACHE_TTL_MS) return null;
+    return entry.data || null;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -1316,7 +1344,10 @@ function bindSoftNavigation() {
 function goClassDetail(id, hash = "") {
   if (!id) return;
   const cls = getClasses().find(x => x.id === id);
-  if (cls) cachePrefetchClass(cls);
+  if (cls) {
+    cachePrefetchClass(cls);
+    cacheClassDetail(cls);
+  }
   rememberClassId(id);
   const suffix = hash ? (hash.startsWith("#") ? hash : `#${hash}`) : "";
   navigateTo(`class_detail.html?id=${encodeURIComponent(id)}${suffix}`);

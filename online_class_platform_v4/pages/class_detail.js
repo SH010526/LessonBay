@@ -183,6 +183,7 @@ async function loadClassDetailPage() {
   let c = classes.find(x => x.id === id);
   const user = getUser();
   let needsRemote = false;
+  let usedCachedDetail = false;
 
   // 직전 페이지에서 넘겨둔 프리페치 데이터 활용
   if (!c) {
@@ -190,6 +191,16 @@ async function loadClassDetailPage() {
     if (prefetched) {
       c = prefetched;
       const merged = [...classes.filter(x => x.id !== prefetched.id), prefetched];
+      setClasses(merged);
+    }
+  }
+
+  if (!c) {
+    const cachedDetail = loadCachedClassDetail(id);
+    if (cachedDetail) {
+      c = cachedDetail;
+      usedCachedDetail = true;
+      const merged = [...classes.filter(x => x.id !== cachedDetail.id), cachedDetail];
       setClasses(merged);
     }
   }
@@ -207,6 +218,8 @@ async function loadClassDetailPage() {
       monthlyPrice: 0,
       thumb: FALLBACK_THUMB,
     };
+  } else if (usedCachedDetail) {
+    needsRemote = true;
   }
 
   const applyDetail = () => {
@@ -241,6 +254,7 @@ async function loadClassDetailPage() {
         Object.assign(c, normalized);
         const next = [...classes.filter(x => x.id !== c.id), normalized];
         setClasses(next);
+        cacheClassDetail(normalized);
         applyDetail();
         calc();
         refreshGates();
