@@ -1551,9 +1551,9 @@ async function ensureSeedData() {
   rerenderVisible();
   updateNav();
 
-  // 원격 수업 목록
+  // 원격 수업 목록 (지연 없이 즉시 시작)
   if (!detailOnly) {
-    scheduleIdleTask(() => (async () => {
+    (async () => {
       try {
         const classes = await apiGet("/api/classes", { silent: true });
         const normalized = (classes || []).map(c => ({
@@ -1567,7 +1567,7 @@ async function ensureSeedData() {
       } catch (e) {
         console.error("classes fetch failed", e);
       }
-    })());
+    })();
   }
 
   let enrollFetchPromise = null;
@@ -1602,13 +1602,11 @@ async function ensureSeedData() {
     try {
       const u = getUser();
       if (u) {
-        scheduleIdleTask(async () => {
-          try {
-            await loadEnrollmentsFor(u);
-          } catch (e) {
-            console.error("enrollments fetch failed (late)", e);
-          }
-        });
+        try {
+          await loadEnrollmentsFor(u);
+        } catch (e) {
+          console.error("enrollments fetch failed (late)", e);
+        }
       }
       rerenderVisible();
       updateNav();
