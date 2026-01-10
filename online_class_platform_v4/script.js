@@ -20,6 +20,7 @@
 
 const SUPABASE_URL = "https://pqvdexhxytahljultmjd.supabase.co";   // Project URL
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxdmRleGh4eXRhaGxqdWx0bWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5NjMzNTMsImV4cCI6MjA4MTUzOTM1M30.WzJWY3-92Bwkic-Wb2rOmZ1joEUj-s69cSL2hPT79fQ";             // anon public key
+const SUPABASE_SDK_SRC = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
 const STORAGE_BUCKET = "LessonBay"; // Supabase Storage 버킷 이름
 const SUPABASE_PROJECT_REF = (() => {
   try {
@@ -31,6 +32,7 @@ const SUPABASE_PROJECT_REF = (() => {
 
 // ? SDK가 없는 페이지에서도 크래시 나지 않게 (전역 supabase와 이름 충돌 방지)
 let supabaseClient = null;
+let __supabaseSdkPromise = null;
 function ensureSupabaseClient() {
   if (supabaseClient) return supabaseClient;
   try {
@@ -44,8 +46,46 @@ function ensureSupabaseClient() {
 }
 ensureSupabaseClient();
 
+function loadSupabaseSdkOnce() {
+  if (typeof document === "undefined") return Promise.resolve(null);
+  if (window.supabase && typeof window.supabase.createClient === "function") {
+    return Promise.resolve(window.supabase);
+  }
+  if (__supabaseSdkPromise) return __supabaseSdkPromise;
+
+  __supabaseSdkPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${SUPABASE_SDK_SRC}"]`);
+    if (existing && (existing.dataset.loaded === "1")) {
+      resolve(window.supabase || null);
+      return;
+    }
+    const s = existing || document.createElement("script");
+    if (!existing) {
+      s.src = SUPABASE_SDK_SRC;
+      s.async = true;
+      s.setAttribute("data-supabase-sdk", "1");
+    }
+    s.onload = () => {
+      s.dataset.loaded = "1";
+      resolve(window.supabase || null);
+    };
+    s.onerror = () => {
+      __supabaseSdkPromise = null;
+      reject(new Error("Supabase SDK load failed"));
+    };
+    if (!existing) {
+      (document.head || document.body || document.documentElement).appendChild(s);
+    }
+  });
+
+  return __supabaseSdkPromise;
+}
+
 async function waitForSupabaseClient(timeoutMs = 3000, intervalMs = 120) {
   const start = Date.now();
+  if (!supabaseClient) {
+    try { await loadSupabaseSdkOnce(); } catch (_) {}
+  }
   while (!supabaseClient && Date.now() - start < timeoutMs) {
     ensureSupabaseClient();
     if (supabaseClient) break;
