@@ -623,7 +623,25 @@ async function forceDownload(url, filename = "download") {
    ============================ */
 async function syncLocalUserFromSupabaseSession() {
   ensureSupabaseClient();
-  if (!supabaseClient) return;
+  const applySession = (session) => {
+    if (!session || !session.user) return false;
+    const u = session.user;
+    const email = String(u.email || "").trim();
+    const name = String(u.user_metadata?.name || "").trim() || (email ? email.split("@")[0] : "사용자");
+    const roleMeta = u.user_metadata?.role;
+    const role = (roleMeta === "teacher" || roleMeta === "student" || roleMeta === "admin")
+      ? roleMeta
+      : "student";
+    userCache = { id: u.id, name, role, email };
+    return true;
+  };
+  if (!supabaseClient || !supabaseClient.auth?.getSession) {
+    const stored =
+      readSupabaseSessionFromStorage(typeof localStorage !== "undefined" ? localStorage : null) ||
+      readSupabaseSessionFromStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
+    if (!applySession(stored)) userCache = null;
+    return;
+  }
 
   try {
     const { data: sessionData } = await supabaseClient.auth.getSession();
@@ -633,18 +651,12 @@ async function syncLocalUserFromSupabaseSession() {
       userCache = null;
       return;
     }
-
-    const u = session.user;
-    const email = String(u.email || "").trim();
-    const name = String(u.user_metadata?.name || "").trim() || (email ? email.split("@")[0] : "사용자");
-    const roleMeta = u.user_metadata?.role;
-    const role = (roleMeta === "teacher" || roleMeta === "student" || roleMeta === "admin")
-      ? roleMeta
-      : "student";
-
-    userCache = { id: u.id, name, role, email };
+    applySession(session);
   } catch (_) {
-    // ignore
+    const stored =
+      readSupabaseSessionFromStorage(typeof localStorage !== "undefined" ? localStorage : null) ||
+      readSupabaseSessionFromStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
+    if (!applySession(stored)) userCache = null;
   }
 }
 
@@ -1937,12 +1949,14 @@ function init() {
   scheduleAfterPaint(() => {
     // 네트워크 핸드셰이크 단축 (Supabase/Livekit/jsdelivr)
     (function injectPreconnects() {
+      const needsSupabase = !!document.querySelector('script[src*="supabase-js"]');
       const origins = [
         "https://cdn.jsdelivr.net",
-        SUPABASE_URL,
-        SUPABASE_URL.replace("https://", "https://*."),
         "https://*.livekit.cloud",
       ];
+      if (needsSupabase) {
+        origins.push(SUPABASE_URL, SUPABASE_URL.replace("https://", "https://*."));
+      }
       const head = document.head || document.getElementsByTagName("head")[0];
       origins.forEach((o) => {
         if (!o || document.querySelector(`link[data-preconnect="${o}"]`)) return;
