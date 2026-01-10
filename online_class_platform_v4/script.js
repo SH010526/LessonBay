@@ -682,6 +682,7 @@ const ENROLL_CACHE_KEY = "lessonbay:enrollCacheV1";
 const CACHE_TTL_MS = 1000 * 60 * 10; // 10분 캐시
 const ENROLL_CACHE_TTL_MS = 1000 * 60 * 2; // 2분 캐시
 const PREFETCH_PAGE_TTL_MS = 1000 * 60 * 5; // 5분 캐시
+const PAGE_HTML_CACHE_TTL_MS = 1000 * 60 * 5; // 5분 캐시
 
 function sleep(ms = 0) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -846,6 +847,59 @@ function prefetchPage(href) {
   try {
     sessionStorage.setItem(key, JSON.stringify({ at: Date.now() }));
   } catch (_) {}
+
+  // HTML 프리패치 캐시 (soft nav용)
+  prefetchPageHtml(url);
+}
+
+function pageHtmlCacheKey(url) {
+  try {
+    const u = new URL(url, location.href);
+    return `pagehtml:${u.pathname}${u.search || ""}`;
+  } catch (_) {
+    return `pagehtml:${url}`;
+  }
+}
+
+function getCachedPageHtml(url) {
+  try {
+    const key = pageHtmlCacheKey(url);
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = safeParse(raw, null);
+    if (!parsed?.html) return null;
+    if (parsed.at && Date.now() - parsed.at > PAGE_HTML_CACHE_TTL_MS) return null;
+    return parsed.html;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setCachedPageHtml(url, html) {
+  if (!html) return;
+  try {
+    const key = pageHtmlCacheKey(url);
+    sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), html }));
+  } catch (_) {}
+}
+
+async function fetchPageHtml(url) {
+  const cached = getCachedPageHtml(url);
+  if (cached) return cached;
+  const res = await fetch(url, { headers: { "X-Requested-With": "fetch" } });
+  if (!res.ok) throw new Error(`page fetch failed: ${res.status}`);
+  const html = await res.text();
+  setCachedPageHtml(url, html);
+  return html;
+}
+
+function prefetchPageHtml(url) {
+  if (!url || typeof fetch === "undefined") return;
+  if (getCachedPageHtml(url)) return;
+  fetch(url, { headers: { "X-Requested-With": "fetch" } })
+    .then((res) => (res.ok ? res.text() : null))
+    .then((html) => { if (html) setCachedPageHtml(url, html); })
+    .catch(() => {});
 }
 
 function prefetchCorePages() {
@@ -863,7 +917,10 @@ function prefetchCorePages() {
   pages.forEach(prefetchPage);
 }
 
+let __navPrefetchBound = false;
 function bindNavPrefetch() {
+  if (__navPrefetchBound) return;
+  __navPrefetchBound = true;
   if (typeof document === "undefined") return;
   document.addEventListener("pointerenter", (e) => {
     const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
@@ -874,7 +931,11 @@ function bindNavPrefetch() {
   }, true);
 }
 
+let __warmupStarted = false;
+let __warmupTimer = null;
 function warmupBackend() {
+  if (__warmupStarted) return;
+  __warmupStarted = true;
   if (!isProdOrigin()) return;
   const ping = () => {
     try {
@@ -882,7 +943,7 @@ function warmupBackend() {
     } catch (_) {}
   };
   ping();
-  setInterval(() => {
+  __warmupTimer = setInterval(() => {
     if (document.visibilityState !== "visible") return;
     ping();
   }, 60 * 1000);
@@ -932,13 +993,101 @@ function resolveClassIdFromUrl() {
   // 쿼리 유실 시 마지막으로 열었던 수업 ID로 복원
   return readLastClassId();
 }
+const SOFT_NAV_ENABLED = true;
+let __softNavBound = false;
+let __softNavInFlight = false;
+
+function isSameOrigin(url) {
+  try {
+    const u = new URL(url, location.href);
+    return u.origin === location.origin;
+  } catch (_) {
+    return false;
+  }
+}
+
+function isHtmlRoute(url) {
+  try {
+    const u = new URL(url, location.href);
+    const p = u.pathname.toLowerCase();
+    return p.endsWith(".html") || p === "/" || p === "";
+  } catch (_) {
+    return false;
+  }
+}
+
+function shouldSoftNavigate(url) {
+  if (!SOFT_NAV_ENABLED) return false;
+  if (!url) return false;
+  if (url.startsWith("http") && !isSameOrigin(url)) return false;
+  if (!isHtmlRoute(url)) return false;
+  return true;
+}
+
+async function softNavigate(url, opts = {}) {
+  if (__softNavInFlight) return;
+  __softNavInFlight = true;
+  const replace = !!opts.replace;
+  try {
+    const u = new URL(url, location.href);
+    if (u.hash && u.pathname === location.pathname && u.search === location.search) {
+      location.hash = u.hash;
+      return;
+    }
+    const html = await fetchPageHtml(u.toString());
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    if (doc?.title) document.title = doc.title;
+    const body = doc.body;
+    if (!body) return;
+    document.body.innerHTML = body.innerHTML;
+    if (replace) history.replaceState({}, "", u.toString());
+    else history.pushState({}, "", u.toString());
+    window.scrollTo(0, 0);
+    try { init(); } catch (e) { console.error("soft nav init failed", e); }
+  } catch (e) {
+    console.error("soft nav failed", e);
+    location.href = url;
+  } finally {
+    __softNavInFlight = false;
+  }
+}
+
+function navigateTo(url, opts = {}) {
+  if (shouldSoftNavigate(url)) {
+    softNavigate(url, opts);
+    return;
+  }
+  if (opts.replace) location.replace(url);
+  else location.href = url;
+}
+
+function bindSoftNavigation() {
+  if (__softNavBound) return;
+  __softNavBound = true;
+  document.addEventListener("click", (e) => {
+    const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a) return;
+    if (a.hasAttribute("download")) return;
+    const target = (a.getAttribute("target") || "").toLowerCase();
+    if (target && target !== "_self") return;
+    const href = a.getAttribute("href") || "";
+    if (!shouldSoftNavigate(href)) return;
+    e.preventDefault();
+    navigateTo(href);
+  });
+
+  window.addEventListener("popstate", () => {
+    if (!shouldSoftNavigate(location.href)) return;
+    softNavigate(location.href, { replace: true });
+  });
+}
 function goClassDetail(id, hash = "") {
   if (!id) return;
   const cls = getClasses().find(x => x.id === id);
   if (cls) cachePrefetchClass(cls);
   rememberClassId(id);
   const suffix = hash ? (hash.startsWith("#") ? hash : `#${hash}`) : "";
-  location.href = `class_detail.html?id=${encodeURIComponent(id)}${suffix}`;
+  navigateTo(`class_detail.html?id=${encodeURIComponent(id)}${suffix}`);
 }
 function escapeHtml(s) {
   return String(s ?? "")
@@ -1395,7 +1544,7 @@ async function doLogout(goHome = true) {
 
   setUser(null);
   clearOldAuthKeys();
-  if (goHome) location.href = "index.html";
+  if (goHome) navigateTo("index.html", { replace: true });
 }
 
 function updateNav() {
@@ -1572,7 +1721,7 @@ function handleSignupPage() {
           // 계정 생성됨 -> 로그인
           await supabaseLogin(email, pw);
           statusEl.textContent = "가입 및 로그인 완료! 잠시 후 이동합니다.";
-          setTimeout(() => { location.href = "index.html"; }, 500);
+          setTimeout(() => { navigateTo("index.html", { replace: true }); }, 500);
         } catch (e) {
           statusEl.textContent = e?.message || "인증 실패";
         } finally {
@@ -1616,7 +1765,7 @@ function handleLoginPage() {
         : user.role === "admin"
           ? "settings.html"
           : "student_dashboard.html";
-      location.href = dest;
+      navigateTo(dest, { replace: true });
     }
   })();
 
@@ -1651,7 +1800,7 @@ function handleLoginPage() {
       setBtnLoading(submitBtn, true, "로그인중...");
       await supabaseLogin(email, pw);
       setMsg("로그인 성공! 이동합니다.", false);
-      setTimeout(() => { location.href = "index.html"; }, 300);
+      setTimeout(() => { navigateTo("index.html", { replace: true }); }, 300);
     } catch (err) {
       setMsg(err?.message || "로그인 실패", true);
     } finally {
@@ -1716,7 +1865,7 @@ function handleSettingsPage() {
   (async () => {
     let user = getUser();
     if (!user) user = await ensureUserReady();
-    if (!user) { location.href = "login.html"; return; }
+    if (!user) { navigateTo("login.html", { replace: true }); return; }
 
   const info = $("#settingsInfo");
   if (info) {
@@ -2137,7 +2286,7 @@ async function loadClassDetailPage() {
   if (!id) {
     $("#detailTitle").textContent = "수업을 찾을 수 없습니다.";
     showToast("수업 ID가 전달되지 않았어요. 수업 목록으로 이동합니다.", "warn");
-    setTimeout(() => { location.href = "classes.html"; }, 800);
+    setTimeout(() => { navigateTo("classes.html", { replace: true }); }, 800);
     return;
   }
   rememberClassId(id);
@@ -2462,7 +2611,7 @@ function ensureProtectedData() {
         const u = getUser();
         if (!u) {
           alert("로그인이 필요합니다.");
-          location.href = "login.html";
+          navigateTo("login.html");
           return;
         }
 
@@ -2473,7 +2622,7 @@ function ensureProtectedData() {
             alert("선생님은 본인 수업만 라이브에 들어갈 수 있습니다.");
             return;
           }
-          location.href = `live_class.html?id=${encodeURIComponent(c.id)}&s=1`;
+          navigateTo(`live_class.html?id=${encodeURIComponent(c.id)}&s=1`);
           return;
         }
 
@@ -2484,7 +2633,7 @@ function ensureProtectedData() {
           return;
         }
 
-        location.href = `live_class.html?id=${encodeURIComponent(c.id)}&s=1`;
+        navigateTo(`live_class.html?id=${encodeURIComponent(c.id)}&s=1`);
       });
     });
   }
@@ -2501,7 +2650,7 @@ function ensureProtectedData() {
     const user = getUser();
     if (!user) {
       alert("로그인이 필요합니다.");
-      location.href = "login.html";
+      navigateTo("login.html");
       return;
     }
     if (user.role !== "student") {
@@ -3812,7 +3961,7 @@ function handleCreateClassPage() {
         const refreshed = await apiGet("/api/classes").catch(() => []);
         setClasses(refreshed || []);
         alert("수업 생성 완료!");
-        location.href = "teacher_dashboard.html";
+        navigateTo("teacher_dashboard.html");
       } catch (e) {
         console.error(e);
         alert("수업 생성 실패\n" + (e?.message || ""));
@@ -3835,8 +3984,8 @@ function loadTeacherDashboard() {
   (async () => {
     let user = getUser();
     if (!user) user = await ensureUserReady();
-    if (!user) { location.href = "login.html"; return; }
-    if (user.role !== "teacher") { location.href = "student_dashboard.html"; return; }
+    if (!user) { navigateTo("login.html", { replace: true }); return; }
+    if (user.role !== "teacher") { navigateTo("student_dashboard.html", { replace: true }); return; }
 
     let classes = getClasses();
     if (!classes.length) {
@@ -3893,7 +4042,7 @@ function loadTeacherDashboard() {
     $$('[data-live]').forEach(btn => {
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-live');
-        location.href = `live_class.html?id=${encodeURIComponent(id)}&s=1`;
+        navigateTo(`live_class.html?id=${encodeURIComponent(id)}&s=1`);
       });
     });
 
@@ -3926,8 +4075,8 @@ function loadStudentDashboard() {
   (async () => {
     let user = getUser();
     if (!user) user = await ensureUserReady();
-    if (!user) { location.href = "login.html"; return; }
-    if (user.role !== "student") { location.href = "teacher_dashboard.html"; return; }
+    if (!user) { navigateTo("login.html", { replace: true }); return; }
+    if (user.role !== "student") { navigateTo("teacher_dashboard.html", { replace: true }); return; }
 
     let classes = getClasses();
     if (!classes.length) {
@@ -3989,7 +4138,7 @@ function loadStudentDashboard() {
       btn.highlightBound = "1";
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-live');
-        location.href = `live_class.html?id=${encodeURIComponent(id)}&s=1`;
+        navigateTo(`live_class.html?id=${encodeURIComponent(id)}&s=1`);
       });
     });
 
@@ -4033,7 +4182,7 @@ async function loadLivePage() {
 
   let user = getUser();
   if (!user) user = await ensureUserReady();
-  if (!user) { alert("로그인이 필요합니다."); location.href = "login.html"; return; }
+  if (!user) { alert("로그인이 필요합니다."); navigateTo("login.html"); return; }
 
   const isOwnerTeacher = isOwnerTeacherForClass(user, c);
   const isStudentActive = (user.role === "student" && isEnrollmentActiveForUser(user, classId));
@@ -4667,6 +4816,7 @@ function init() {
   runReveal();
   prefetchCorePages();
   bindNavPrefetch();
+  bindSoftNavigation();
   warmupBackend();
 
   // 화면 즉시 렌더, 데이터는 백그라운드
