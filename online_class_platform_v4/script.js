@@ -711,6 +711,14 @@ function sleep(ms = 0) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function scheduleIdleTask(fn, timeout = 800) {
+  if (typeof fn !== "function") return null;
+  if (typeof requestIdleCallback === "function") {
+    return requestIdleCallback(() => fn(), { timeout });
+  }
+  return setTimeout(fn, Math.min(timeout, 300));
+}
+
 function isHttpLike(u) {
   return /^https?:\/\//i.test(u || "");
 }
@@ -1468,8 +1476,6 @@ async function loadLocalSampleClasses() {
 
 async function ensureSeedData() {
   const sessionPromise = syncLocalUserFromSupabaseSession().catch(() => {});
-  await Promise.race([sessionPromise, sleep(1200)]);
-
   const detailOnly = !!document.getElementById("detailRoot") && !document.getElementById("classGrid") && !document.getElementById("homePopular");
 
   const cached = loadCachedClasses();
@@ -1507,7 +1513,7 @@ async function ensureSeedData() {
 
   // 원격 수업 목록
   if (!detailOnly) {
-    (async () => {
+    scheduleIdleTask(() => (async () => {
       try {
         const classes = await apiGet("/api/classes", { silent: true });
         const normalized = (classes || []).map(c => ({
@@ -1521,7 +1527,7 @@ async function ensureSeedData() {
       } catch (e) {
         console.error("classes fetch failed", e);
       }
-    })();
+    })());
   }
 
   let enrollFetchPromise = null;
@@ -1556,11 +1562,13 @@ async function ensureSeedData() {
     try {
       const u = getUser();
       if (u) {
-        try {
-          await loadEnrollmentsFor(u);
-        } catch (e) {
-          console.error("enrollments fetch failed (late)", e);
-        }
+        scheduleIdleTask(async () => {
+          try {
+            await loadEnrollmentsFor(u);
+          } catch (e) {
+            console.error("enrollments fetch failed (late)", e);
+          }
+        });
       }
       rerenderVisible();
       updateNav();
@@ -4923,5 +4931,4 @@ function init() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
-
 
