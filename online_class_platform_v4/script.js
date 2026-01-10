@@ -682,6 +682,7 @@ const HTML_QUERY_IGNORED = new Set([
 
 // 과제 선택 유지용 임시 변수
 let assignPendingSelect = null;
+let __detailPageNonce = 0;
 
 const $ = (sel, el = document) => el.querySelector(sel); 
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
@@ -948,17 +949,26 @@ function prefetchPageHtml(url) {
 
 function prefetchCorePages() {
   if (!isProdOrigin()) return;
-  const pages = [
-    "index.html",
-    "classes.html",
-    "class_detail.html",
-    "teacher_dashboard.html",
-    "student_dashboard.html",
-    "create_class.html",
-    "settings.html",
-    "live_class.html",
-  ];
-  pages.forEach(prefetchPage);
+  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (conn?.saveData || /2g/.test(conn?.effectiveType || "")) return;
+  const page = getPath();
+  const plan = {
+    "index.html": ["classes.html"],
+    "classes.html": ["class_detail.html"],
+    "class_detail.html": ["live_class.html", "classes.html"],
+    "teacher_dashboard.html": ["class_detail.html"],
+    "student_dashboard.html": ["class_detail.html"],
+    "create_class.html": ["classes.html"],
+    "live_class.html": ["class_detail.html"],
+  };
+  const pages = plan[page] || [];
+  if (!pages.length) return;
+  const run = () => pages.forEach(prefetchPage);
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(run, { timeout: 1500 });
+  } else {
+    setTimeout(run, 800);
+  }
 }
 
 let __navPrefetchBound = false;
@@ -2303,12 +2313,23 @@ async function loadClassDetailPage() {
   const root = $("#detailRoot");
   if (!root) return;
 
+  const detailNonce = ++__detailPageNonce;
+  root.dataset.detailNonce = String(detailNonce);
+  const isDetailPageActive = () => {
+    const current = document.getElementById("detailRoot");
+    if (!current || current !== root) return false;
+    if (!document.body.contains(root)) return false;
+    return root.dataset.detailNonce === String(detailNonce);
+  };
+
   ensureReplayModalBinding();
   let assignExistingFile = null; // 학생 과제 편집 시 기존 첨부 유지/삭제용
   const installDetailTabs = () => {
+    if (!isDetailPageActive()) return;
     const pills = $$("#detailTabNav .pill");
     const sections = $$("[data-section]");
     const show = (key) => {
+      if (!isDetailPageActive()) return;
       sections.forEach(sec => {
         const name = sec.getAttribute("data-section");
         sec.style.display = (name === key) ? "" : "none";
@@ -2336,6 +2357,7 @@ async function loadClassDetailPage() {
     setTimeout(() => { navigateTo("classes.html", { replace: true }); }, 800);
     return;
   }
+  root.dataset.classId = String(id);
   rememberClassId(id);
 
   const classes = getClasses();
@@ -2369,6 +2391,7 @@ async function loadClassDetailPage() {
   }
 
   const applyDetail = () => {
+    if (!isDetailPageActive()) return;
     $("#detailImg").src = initialThumbSrc(c.thumb);
     $("#detailImg").setAttribute("data-thumb", c.thumb || "");
     $("#detailImg").setAttribute("loading", "lazy");
@@ -2389,6 +2412,7 @@ async function loadClassDetailPage() {
       try {
         const remote = await apiGet(`/api/classes/${encodeURIComponent(id)}`, { silent: true });
         if (!remote) throw new Error("empty response");
+        if (!isDetailPageActive()) return;
         const normalized = {
           ...remote,
           teacher: remote.teacher?.name || remote.teacherName || remote.teacher || "-",
@@ -2404,7 +2428,7 @@ async function loadClassDetailPage() {
         ensureProtectedData();
       } catch (e) {
         console.error("class detail fetch failed", e);
-        showToast("수업 정보를 불러오지 못했어요.", "warn");
+        if (isDetailPageActive()) showToast("수업 정보를 불러오지 못했어요.", "warn");
       }
     })();
   }
@@ -2413,10 +2437,12 @@ async function loadClassDetailPage() {
   const detailLoadCache = { mats: false, assigns: false, revs: false, qnas: false };
   let protectedLoaded = false;
   async function fetchMaterialsData() {
+    if (!isDetailPageActive()) return;
     if (detailLoadCache.mats) return;
     detailLoadCache.mats = true;
     try {
       const mats = await apiGet(`/api/classes/${encodeURIComponent(id)}/materials`, { silent: true }).catch(() => []);
+      if (!isDetailPageActive()) return;
       const map = getMaterials();
       map[id] = mats || [];
       setMaterials(map);
@@ -2424,10 +2450,12 @@ async function loadClassDetailPage() {
     } catch (e) { console.error("materials fetch failed", e); }
   }
   async function fetchAssignmentsData() {
+    if (!isDetailPageActive()) return;
     if (detailLoadCache.assigns) return;
     detailLoadCache.assigns = true;
     try {
       const assigns = await apiGet(`/api/classes/${encodeURIComponent(id)}/assignments`, { silent: true }).catch(() => []);
+      if (!isDetailPageActive()) return;
       const map = getAssignments();
       map[id] = assigns || [];
       setAssignments(map);
@@ -2435,10 +2463,12 @@ async function loadClassDetailPage() {
     } catch (e) { console.error("assignments fetch failed", e); }
   }
   async function fetchReviewsData() {
+    if (!isDetailPageActive()) return;
     if (detailLoadCache.revs) return;
     detailLoadCache.revs = true;
     try {
       const revs = await apiGet(`/api/classes/${encodeURIComponent(id)}/reviews`, { silent: true }).catch(() => []);
+      if (!isDetailPageActive()) return;
       const map = getReviews();
       map[id] = revs || [];
       setReviews(map);
@@ -2446,10 +2476,12 @@ async function loadClassDetailPage() {
     } catch (e) { console.error("reviews fetch failed", e); }
   }
   async function fetchQnaData() {
+    if (!isDetailPageActive()) return;
     if (detailLoadCache.qnas) return;
     detailLoadCache.qnas = true;
     try {
       const qnas = await apiGet(`/api/classes/${encodeURIComponent(id)}/qna`, { silent: true }).catch(() => []);
+      if (!isDetailPageActive()) return;
       const map = getQna();
       map[id] = qnas || [];
       setQna(map);
@@ -2540,6 +2572,7 @@ async function loadClassDetailPage() {
   }
 
 function ensureProtectedData() {
+  if (!isDetailPageActive()) return;
   if (protectedLoaded) return;
   const status = getEnrollStatusForUI(getUser());
   const allowed = status.state === "owner_teacher" || status.state === "student_active";
@@ -2556,6 +2589,7 @@ function ensureProtectedData() {
 }
 
   function refreshGates() {
+    if (!isDetailPageActive()) return;
     const user = getUser();
     const status = getEnrollStatusForUI(user);
 
@@ -2739,6 +2773,7 @@ function ensureProtectedData() {
   // 자료실 / 과제 / 리뷰 / Q&A 렌더링
   // ---------------------------
   function renderMaterials() {
+    if (!isDetailPageActive()) return;
     const list = $("#materialList");
     if (!list) return;
     const mats = getMaterials()[c.id] || [];
@@ -2787,6 +2822,7 @@ function ensureProtectedData() {
   }
 
   function renderAssignments() {
+    if (!isDetailPageActive()) return;
     const list = $("#assignList");
     if (!list) return;
     const assignList = getAssignments()[c.id] || [];
@@ -3447,6 +3483,7 @@ function ensureProtectedData() {
   }
 
   function renderReviews() {
+    if (!isDetailPageActive()) return;
     const list = $("#reviewList");
     if (!list) return;
     const revs = getReviews()[c.id] || [];
@@ -3467,6 +3504,7 @@ function ensureProtectedData() {
   }
 
   function renderQna() {
+    if (!isDetailPageActive()) return;
     const list = $("#qnaList");
     if (!list) return;
     const nameOf = (obj) => escapeHtml(displayUserName(obj));
@@ -3701,6 +3739,8 @@ function ensureProtectedData() {
 async function renderReplaysList(classId) {
   const wrap = $("#sessionList");
   if (!wrap) return;
+  const detailRoot = document.getElementById("detailRoot");
+  if (detailRoot?.dataset?.classId && String(detailRoot.dataset.classId) !== String(classId)) return;
 
   const user = getUser();
   const cls = getClasses().find((x) => x.id === classId);
