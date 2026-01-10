@@ -741,15 +741,23 @@ app.post("/api/classes/:id/enroll", requireAuth, requireStudent, async (req, res
 
 app.get("/api/me/enrollments", requireAuth, async (req, res) => {
   try {
+    const cacheKey = `enroll:${req.user.id}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      setCacheHeaders(res, 20, 60);
+      return res.json(cached);
+    }
     const list = await prisma.enrollment.findMany({
       where: { userId: req.user.id },
       orderBy: { createdAt: "desc" },
       include: { class: true },
     });
+    cacheSet(cacheKey, list, 20 * 1000);
+    setCacheHeaders(res, 20, 60);
     res.json(list);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "수강 목록 조회 실패" });
+    res.status(500).json({ error: "????? ?????? ?????? ?????" });
   }
 });
 

@@ -678,7 +678,9 @@ function getParam(name) { return new URLSearchParams(location.search).get(name);
 const LAST_CLASS_KEY = "lessonbay:lastClassId";
 const CLASS_CACHE_KEY = "lessonbay:classCacheV1";
 const PREFETCH_CLASS_KEY = "lessonbay:prefetchClassV1";
+const ENROLL_CACHE_KEY = "lessonbay:enrollCacheV1";
 const CACHE_TTL_MS = 1000 * 60 * 10; // 10분 캐시
+const ENROLL_CACHE_TTL_MS = 1000 * 60 * 2; // 2분 캐시
 
 function sleep(ms = 0) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -781,6 +783,38 @@ function loadCachedClasses() {
     return parsed.list;
   } catch (_) {
     return [];
+  }
+}
+
+function getUserCacheKey(user) {
+  if (!user) return "";
+  if (user.id) return `id:${user.id}`;
+  const email = normalizeEmail(user.email || "");
+  if (email) return `email:${email}`;
+  const name = String(user.name || "").trim();
+  return name ? `name:${name}` : "";
+}
+
+function cacheEnrollments(user, list) {
+  const key = getUserCacheKey(user);
+  if (!key) return;
+  try {
+    sessionStorage.setItem(ENROLL_CACHE_KEY, JSON.stringify({ at: Date.now(), key, list: list || [] }));
+  } catch (_) {}
+}
+
+function loadCachedEnrollments(user) {
+  try {
+    const raw = sessionStorage.getItem(ENROLL_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = safeParse(raw, null);
+    if (!parsed?.list || !Array.isArray(parsed.list)) return null;
+    if (parsed.at && Date.now() - parsed.at > ENROLL_CACHE_TTL_MS) return null;
+    const key = getUserCacheKey(user);
+    if (!key || parsed.key !== key) return null;
+    return parsed.list;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -1171,7 +1205,16 @@ async function ensureSeedData() {
     setClasses([]);
   }
   const user = getUser();
-  setEnrollments(user ? {} : {});
+  if (user) {
+    const cachedEnroll = loadCachedEnrollments(user);
+    if (cachedEnroll) {
+      setEnrollments(cachedEnroll);
+    } else {
+      setEnrollments({});
+    }
+  } else {
+    setEnrollments({});
+  }
 
   const rerenderVisible = () => {
     if ($("#homePopular")) loadHomePopular();
@@ -1205,19 +1248,31 @@ async function ensureSeedData() {
     })();
   }
 
-  // 원격 수강 정보
-  if (user) {
-    (async () => {
+  let enrollFetchPromise = null;
+  let enrollFetchKey = "";
+  const loadEnrollmentsFor = async (u) => {
+    const key = getUserCacheKey(u);
+    if (!key) return;
+    if (enrollFetchPromise && enrollFetchKey === key) return enrollFetchPromise;
+    enrollFetchKey = key;
+    enrollFetchPromise = (async () => {
       try {
         const enrollList = await apiGet("/api/me/enrollments", { silent: true });
         setEnrollments(enrollList || []);
+        cacheEnrollments(u, enrollList || []);
         rerenderVisible();
       } catch (e) {
         console.error("enrollments fetch failed", e);
+      } finally {
+        enrollFetchPromise = null;
       }
     })();
-  } else {
-    setEnrollments({});
+    return enrollFetchPromise;
+  };
+
+  // 원격 수강 정보 (캐시로 먼저 렌더, 백그라운드 갱신)
+  if (user) {
+    loadEnrollmentsFor(user);
   }
 
   // 세션 동기화 완료 후 내비/페이지 재반영
@@ -1226,8 +1281,7 @@ async function ensureSeedData() {
       const u = getUser();
       if (u) {
         try {
-          const enrollList = await apiGet("/api/me/enrollments", { silent: true });
-          setEnrollments(enrollList || []);
+          await loadEnrollmentsFor(u);
         } catch (e) {
           console.error("enrollments fetch failed (late)", e);
         }
