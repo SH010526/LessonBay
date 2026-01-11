@@ -1863,7 +1863,8 @@ async function ensureSeedData() {
   };
 
   const cached = loadCachedClasses();
-  if (cached.length) {
+  const hasCachedClasses = cached.length > 0;
+  if (hasCachedClasses) {
     setClasses(cached);
   } else if (!detailOnly) {
     const builtin = getBuiltinClasses();
@@ -1883,9 +1884,11 @@ async function ensureSeedData() {
     setClasses([]);
   }
   const user = getUser();
+  let hasCachedEnroll = false;
   if (user) {
     const cachedEnroll = loadCachedEnrollments(user);
     if (cachedEnroll) {
+      hasCachedEnroll = true;
       setEnrollments(cachedEnroll);
       markEnrollmentsSynced();
     } else {
@@ -1929,12 +1932,12 @@ async function ensureSeedData() {
         console.error("classes fetch failed", e);
       });
   };
-  if (!detailOnly) {
+  if (!detailOnly && !hasCachedClasses) {
     fetchClassesRemote(0);
   }
 
   // 원격 수강 정보 (캐시로 먼저 렌더, 백그라운드 갱신)
-  if (user) {
+  if (user && !hasCachedEnroll) {
     fetchEnrollmentsForUser(user).then(() => rerenderVisible());
   }
 
@@ -1943,11 +1946,14 @@ async function ensureSeedData() {
     try {
       const u = getUser();
       if (u) {
-        try {
-          await fetchEnrollmentsForUser(u, 0, { force: true });
-          rerenderVisible();
-        } catch (e) {
-          console.error("enrollments fetch failed (late)", e);
+        const cachedEnroll = loadCachedEnrollments(u);
+        if (!cachedEnroll) {
+          try {
+            await fetchEnrollmentsForUser(u, 0, { force: true });
+            rerenderVisible();
+          } catch (e) {
+            console.error("enrollments fetch failed (late)", e);
+          }
         }
       }
       rerenderVisible();

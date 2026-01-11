@@ -219,7 +219,7 @@ async function loadClassDetailPage() {
       thumb: FALLBACK_THUMB,
     };
   } else if (usedCachedDetail) {
-    needsRemote = true;
+    needsRemote = false;
   }
 
   const applyDetail = () => {
