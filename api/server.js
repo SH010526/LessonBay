@@ -13,6 +13,7 @@ const nodemailer = require("nodemailer");
 
 const app = express();
 const prisma = new PrismaClient();
+const CDN_BASE_URL = String(process.env.CDN_BASE_URL || "").trim().replace(/\/+$/, "");
 
 // 로그 파일 설정
 const logDir = path.join(__dirname, "..", "logs");
@@ -177,7 +178,40 @@ function setCacheHeaders(res, maxAgeSec = 30, swrSec = 120) {
 }
 
 function setHtmlCacheHeaders(res) {
-  res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
+}
+
+function isStaticAssetPath(p) {
+  return /\.(css|js|mjs|map|png|jpg|jpeg|gif|svg|webp|ico|mp4|woff2?|ttf|eot)$/i.test(p || "");
+}
+
+function withCdnUrl(url) {
+  if (!CDN_BASE_URL) return url;
+  if (!url) return url;
+  if (/^(https?:)?\/\//i.test(url)) return url;
+  if (url.startsWith("data:")) return url;
+  if (!isStaticAssetPath(url)) return url;
+  return `${CDN_BASE_URL}/${url.replace(/^\/+/, "")}`;
+}
+
+function rewriteHtmlForCdn(html) {
+  if (!CDN_BASE_URL) return html;
+  return String(html).replace(/\b(href|src)=["']([^"']+)["']/gi, (m, attr, url) => {
+    return `${attr}="${withCdnUrl(url)}"`;
+  });
+}
+
+function sendHtml(res, filePath) {
+  setHtmlCacheHeaders(res);
+  if (!CDN_BASE_URL) return res.sendFile(filePath);
+  fs.readFile(filePath, "utf8", (err, html) => {
+    if (err) {
+      console.error("HTML read failed", err);
+      return res.status(500).send("Failed to load page.");
+    }
+    res.set("Content-Type", "text/html; charset=utf-8");
+    res.send(rewriteHtmlForCdn(html));
+  });
 }
 
 function stripTimestampPrefix(name) {
@@ -1783,18 +1817,19 @@ app.get(["/class_detail/:id", "/live_class/:id", "/classes/:id"], (req, res, nex
   const base = (req.path.split("/")[1] || "").toLowerCase();
   const file = path.join(clientDir, `${base}.html`);
   if (fs.existsSync(file)) {
-    setHtmlCacheHeaders(res);
-    return res.sendFile(file);
+    return sendHtml(res, file);
   }
   next();
 });
 
-// 깔끔한 주소: .html 요청이면 확장자 없는 경로로 리다이렉트
+// .html 요청은 직접 서빙해 리다이렉트 왕복을 줄임
 app.use((req, res, next) => {
   if (req.path.endsWith(".html")) {
-    const without = req.path.replace(/\.html$/, "") || "/";
-    const query = req.originalUrl.replace(req.path, "");
-    return res.redirect(301, `${without}${query || ""}`);
+    const clean = req.path.replace(/^\/+/, "");
+    const candidate = path.join(clientDir, clean);
+    if (fs.existsSync(candidate)) {
+      return sendHtml(res, candidate);
+    }
   }
   next();
 });
@@ -1805,8 +1840,7 @@ app.use((req, res, next) => {
     const clean = req.path === "/" ? "/index" : req.path.replace(/\/+$/, "");
     const candidate = path.join(clientDir, `${clean}.html`);
     if (fs.existsSync(candidate)) {
-      setHtmlCacheHeaders(res);
-      return res.sendFile(candidate);
+      return sendHtml(res, candidate);
     }
   }
   next();
@@ -1829,8 +1863,7 @@ app.use(express.static(clientDir, {
   },
 }));
 app.get("*", (req, res) => {
-  setHtmlCacheHeaders(res);
-  res.sendFile(path.join(clientDir, "index.html"));
+  sendHtml(res, path.join(clientDir, "index.html"));
 });
 
 // Start
