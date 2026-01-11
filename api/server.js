@@ -842,17 +842,23 @@ app.get("/api/classes", async (req, res) => {
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 0;
     const cacheKey = `classes:list:${limit || "all"}`;
     const cached = cacheGet(cacheKey);
+
+    // Set a header that forces revalidation, preventing stale browser cache.
+    // 'no-cache' instructs the browser to check with the server before using a cached version.
+    res.set("Cache-Control", "private, no-cache");
+
     if (cached) {
-      setCacheHeaders(res, 300, 600);
+      // Fast response from in-memory server-side cache
       return res.json(cached);
     }
+
     const list = await prisma.class.findMany({
       orderBy: { createdAt: "desc" },
       ...(limit ? { take: limit } : {}),
       select: CLASS_SUMMARY_SELECT,
     });
+
     cacheSet(cacheKey, list, CLASS_LIST_CACHE_TTL_MS);
-    setCacheHeaders(res, 300, 600);
     res.json(list);
   } catch (err) {
     console.error(err);
