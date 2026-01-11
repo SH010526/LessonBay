@@ -2191,34 +2191,23 @@ function init() {
 
     ensureSeedData();
 
-    // 히어로 이후 요소는 브라우저 유휴 시간에 렌더
-    scheduleIdleTask(() => {
-      prefetchCorePages();
-      bindNavPrefetch();
-    }, 10); 
+    prefetchCorePages();
+    bindNavPrefetch();
     const homePopular = $("#homePopular");
     if (typeof loadHomePopular === "function" && homePopular && homePopular.dataset.hydrated !== "1") {
-      scheduleIdleTask(() => {
-        if (homePopular.dataset.hydrated !== "1") loadHomePopular();
-      }, 10);
+      if (homePopular.dataset.hydrated !== "1") loadHomePopular();
     }
     const classGrid = $("#classGrid");
     if (typeof loadClassesPage === "function" && classGrid && classGrid.dataset.hydrated !== "1") {
-      scheduleIdleTask(() => {
-        if (classGrid.dataset.hydrated !== "1") loadClassesPage();
-      }, 10);
+      if (classGrid.dataset.hydrated !== "1") loadClassesPage();
     }
     const teacherDash = $("#teacherDash");
     if (typeof loadTeacherDashboard === "function" && teacherDash && teacherDash.dataset.hydrated !== "1") {
-      scheduleIdleTask(() => {
-        if (teacherDash.dataset.hydrated !== "1") loadTeacherDashboard();
-      }, 10);
+      if (teacherDash.dataset.hydrated !== "1") loadTeacherDashboard();
     }
     const studentDash = $("#studentDash");
     if (typeof loadStudentDashboard === "function" && studentDash && studentDash.dataset.hydrated !== "1") {
-      scheduleIdleTask(() => {
-        if (studentDash.dataset.hydrated !== "1") loadStudentDashboard();
-      }, 10);
+      if (studentDash.dataset.hydrated !== "1") loadStudentDashboard();
     }
 
     if (getPath() === "logout.html") doLogout(true);
