@@ -31,6 +31,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || "",
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
+const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || "LessonBay";
+const STORAGE_ALLOWED_PREFIXES = new Set(["class-thumbs", "materials", "replays", "uploads"]);
 
 // HTTPS 리다이렉트 (배포 환경에서 FORCE_HTTPS=1 설정 시 동작)
 app.set("trust proxy", 1);
@@ -243,6 +245,75 @@ function rewriteHtmlForCdn(html) {
   return String(html).replace(/\b(href|src)=["']([^"']+)["']/gi, (m, attr, url) => {
     return `${attr}="${withCdnUrl(url)}"`;
   });
+}
+
+function extractStorageObject(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return null;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      if (!u.hostname.includes("supabase.co")) return null;
+      const m = u.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
+      if (!m) return null;
+      const bucket = m[1];
+      let pathOnly = m[2];
+      try { pathOnly = decodeURIComponent(pathOnly); } catch (_) {}
+      const prefix = pathOnly.split("/")[0] || "";
+      if (!STORAGE_ALLOWED_PREFIXES.has(prefix)) return null;
+      return { bucket, path: pathOnly };
+    } catch (_) {
+      return null;
+    }
+  }
+  const clean = raw.replace(/^\/+/, "");
+  if (!clean) return null;
+  const parts = clean.split("/");
+  let bucket = STORAGE_BUCKET;
+  let pathOnly = clean;
+  if (parts.length > 1 && STORAGE_ALLOWED_PREFIXES.has(parts[1])) {
+    bucket = parts[0];
+    pathOnly = parts.slice(1).join("/");
+  }
+  const prefix = pathOnly.split("/")[0] || "";
+  if (!STORAGE_ALLOWED_PREFIXES.has(prefix)) return null;
+  return { bucket, path: pathOnly };
+}
+
+function collectStorageObjects(values) {
+  const list = [];
+  (Array.isArray(values) ? values : [values]).forEach((v) => {
+    if (!v) return;
+    if (Array.isArray(v)) {
+      v.forEach((inner) => {
+        const parsed = extractStorageObject(inner);
+        if (parsed) list.push(parsed);
+      });
+      return;
+    }
+    const parsed = extractStorageObject(v);
+    if (parsed) list.push(parsed);
+  });
+  return list;
+}
+
+async function deleteStorageObjects(objects, context = "") {
+  const grouped = new Map();
+  (objects || []).forEach((obj) => {
+    if (!obj?.path) return;
+    const bucket = obj.bucket || STORAGE_BUCKET;
+    if (!grouped.has(bucket)) grouped.set(bucket, new Set());
+    grouped.get(bucket).add(obj.path);
+  });
+  for (const [bucket, pathsSet] of grouped.entries()) {
+    const paths = Array.from(pathsSet);
+    if (!paths.length) continue;
+    const { error } = await supabase.storage.from(bucket).remove(paths);
+    if (error) {
+      console.warn("storage remove failed", { bucket, context, error });
+    }
+  }
 }
 
 function sendHtml(res, filePath) {
@@ -684,9 +755,26 @@ app.post("/api/account/delete", requireAuth, async (req, res) => {
   try {
     const myClasses = await prisma.class.findMany({
       where: { teacherId: userId },
-      select: { id: true },
+      select: { id: true, thumbUrl: true },
     });
     const classIds = myClasses.map((c) => c.id);
+    let storageTargets = [];
+    if (classIds.length) {
+      const [materials, replays, submissions] = await Promise.all([
+        prisma.material.findMany({ where: { classId: { in: classIds } }, select: { fileUrl: true } }),
+        prisma.replay.findMany({ where: { classId: { in: classIds } }, select: { vodUrl: true } }),
+        prisma.assignmentSubmission.findMany({
+          where: { assignment: { classId: { in: classIds } } },
+          select: { fileUrl: true },
+        }),
+      ]);
+      storageTargets = collectStorageObjects([
+        myClasses.map((c) => c.thumbUrl),
+        materials.map((m) => m.fileUrl),
+        replays.map((r) => r.vodUrl),
+        submissions.map((s) => s.fileUrl),
+      ]);
+    }
 
     await prisma.$transaction([
       prisma.chatMessage.deleteMany({ where: { OR: [{ userId }, { classId: { in: classIds } }] } }),
@@ -730,6 +818,9 @@ app.post("/api/account/delete", requireAuth, async (req, res) => {
       await supabase.auth.admin.deleteUser(userId);
     } catch (e) {
       console.error("supabase admin delete failed", e);
+    }
+    if (storageTargets.length) {
+      await deleteStorageObjects(storageTargets, `account:${userId}`);
     }
 
     res.json({ ok: true });
@@ -839,6 +930,21 @@ app.delete("/api/classes/:id", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "삭제 권한이 없습니다." });
     }
 
+    const [materials, replays, submissions] = await Promise.all([
+      prisma.material.findMany({ where: { classId }, select: { fileUrl: true } }),
+      prisma.replay.findMany({ where: { classId }, select: { vodUrl: true } }),
+      prisma.assignmentSubmission.findMany({
+        where: { assignment: { classId } },
+        select: { fileUrl: true },
+      }),
+    ]);
+    const storageTargets = collectStorageObjects([
+      cls.thumbUrl,
+      materials.map((m) => m.fileUrl),
+      replays.map((r) => r.vodUrl),
+      submissions.map((s) => s.fileUrl),
+    ]);
+
     await prisma.$transaction([
       prisma.assignmentSubmission.deleteMany({ where: { assignment: { classId } } }),
       prisma.assignment.deleteMany({ where: { classId } }),
@@ -859,6 +965,10 @@ app.delete("/api/classes/:id", requireAuth, async (req, res) => {
     cacheDelPrefix(`replays:${classId}:`);
     cacheDelPrefix(`assign:${classId}:`);
     cacheDelPrefix("enroll:");
+
+    if (storageTargets.length) {
+      await deleteStorageObjects(storageTargets, `class:${classId}`);
+    }
 
     res.json({ ok: true });
   } catch (err) {
@@ -1229,9 +1339,18 @@ app.delete("/api/assignments/:id", requireAuth, requireTeacher, async (req, res)
     if (!assignment) return res.status(404).json({ error: "과제를 찾을 수 없습니다." });
     if (assignment.class.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업의 과제만 삭제 가능합니다." });
 
+    const submissions = await prisma.assignmentSubmission.findMany({
+      where: { assignmentId },
+      select: { fileUrl: true },
+    });
+    const storageTargets = collectStorageObjects(submissions.map((s) => s.fileUrl));
+
     await prisma.assignmentSubmission.deleteMany({ where: { assignmentId } });
     await prisma.assignment.delete({ where: { id: assignmentId } });
     cacheDelPrefix(`assign:${assignment.classId}:`);
+    if (storageTargets.length) {
+      await deleteStorageObjects(storageTargets, `assign:${assignmentId}`);
+    }
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -1364,8 +1483,7 @@ app.get("/api/storage/sign", async (req, res) => {
 
     const cleanPath = rawPath.replace(/^\/+/, "");
     const prefix = cleanPath.split("/")[0] || "";
-    const allowedPrefixes = new Set(["class-thumbs", "materials", "replays", "uploads"]);
-    if (!allowedPrefixes.has(prefix)) {
+    if (!STORAGE_ALLOWED_PREFIXES.has(prefix)) {
       return res.status(400).json({ error: "path not allowed" });
     }
     const cacheKey = `storage:sign:${bucket}:${cleanPath}:${download || ""}`;
@@ -1881,9 +1999,14 @@ app.delete("/api/replays/:id", requireAuth, requireTeacher, async (req, res) => 
       return res.status(403).json({ error: "본인 수업의 다시보기만 삭제할 수 있습니다." });
     }
 
+    const storageTargets = collectStorageObjects([replay.vodUrl]);
+
     await prisma.replay.delete({ where: { id: replayId } });
     cacheDelPrefix(`replays:${replay.classId}:`);
     cacheDelPrefix(`classes:detail:${replay.classId}:`);
+    if (storageTargets.length) {
+      await deleteStorageObjects(storageTargets, `replay:${replayId}`);
+    }
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
