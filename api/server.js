@@ -1528,6 +1528,104 @@ app.post("/api/qna/:id/comments", requireAuth, async (req, res) => {
   }
 });
 
+
+// ---------- Chat ----------
+app.get("/api/classes/:id/chat", requireAuth, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const access = await ensureClassAccess(req, classId);
+    if (access.error) return res.status(404).json({ error: access.error });
+    if (!access.isTeacher && !access.isActiveStudent) {
+      return res.status(403).json({ error: "?? ?? ??? ??? ? ? ????." });
+    }
+
+    const listRaw = await prisma.chatMessage.findMany({
+      where: { classId },
+      orderBy: { sentAt: "asc" },
+      include: { user: { select: { id: true, name: true, email: true, role: true } } },
+    });
+    const list = listRaw.map((m) => ({
+      ...m,
+      userName: m.user?.name || null,
+      userEmail: m.user?.email || null,
+      userRole: m.user?.role || null,
+      user: undefined,
+    }));
+    res.json(list);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "?? ?? ??" });
+  }
+});
+
+app.post("/api/classes/:id/chat", requireAuth, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const { message } = req.body || {};
+    if (!message) return res.status(400).json({ error: "message? ?????." });
+
+    const access = await ensureClassAccess(req, classId);
+    if (access.error) return res.status(404).json({ error: access.error });
+    if (!access.isTeacher && !access.isActiveStudent) {
+      return res.status(403).json({ error: "?? ?? ??? ??? ?? ? ????." });
+    }
+
+    const m = await prisma.chatMessage.create({
+      data: { classId, userId: req.user.id, message },
+      include: { user: { select: { id: true, name: true, email: true, role: true } } },
+    });
+    res.status(201).json({
+      ...m,
+      userName: m.user?.name || null,
+      userEmail: m.user?.email || null,
+      userRole: m.user?.role || null,
+      user: undefined,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "?? ?? ??" });
+  }
+});
+
+// ---------- Attendance ----------
+app.get("/api/classes/:id/attendance", requireAuth, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const access = await ensureClassAccess(req, classId);
+    if (access.error) return res.status(404).json({ error: access.error });
+    if (!access.isTeacher && !access.isActiveStudent) {
+      return res.status(403).json({ error: "?? ?? ??? ??? ? ? ????." });
+    }
+
+    const list = await prisma.attendance.findMany({
+      where: { classId },
+      orderBy: { joinedAt: "asc" },
+    });
+    const filtered = access.isTeacher ? list : list.filter((a) => a.userId === req.user.id);
+    res.json(filtered);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "?? ?? ??" });
+  }
+});
+
+app.post("/api/classes/:id/attendance", requireAuth, requireStudent, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const access = await ensureClassAccess(req, classId);
+    if (access.error) return res.status(404).json({ error: access.error });
+    if (!access.isActiveStudent) return res.status(403).json({ error: "?? ?? ??? ??? ??? ? ????." });
+
+    const a = await prisma.attendance.create({
+      data: { classId, userId: req.user.id },
+    });
+    res.status(201).json(a);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "?? ?? ??" });
+  }
+});
+
 // Admin: suspend user
 app.post("/api/admin/users/:id/suspend", requireAuth, requireAdmin, async (req, res) => {
   try {
