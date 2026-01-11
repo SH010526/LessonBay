@@ -195,6 +195,27 @@ function authCacheSet(token, user) {
   if (!token || !user) return;
   authCache.set(token, { user, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
 }
+const ENSURE_USER_TTL_MS = 5 * 60 * 1000;
+const ensureUserCache = new Map(); // userId -> { role, status, suspendedUntil, expiresAt }
+function ensureUserCacheGet(userId) {
+  if (!userId) return null;
+  const hit = ensureUserCache.get(userId);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    ensureUserCache.delete(userId);
+    return null;
+  }
+  return hit;
+}
+function ensureUserCacheSet(user) {
+  if (!user?.id) return;
+  ensureUserCache.set(user.id, {
+    role: user.role,
+    status: user.status,
+    suspendedUntil: user.suspendedUntil || null,
+    expiresAt: Date.now() + ENSURE_USER_TTL_MS,
+  });
+}
 
 function setCacheHeaders(res, maxAgeSec = 30, swrSec = 120) {
   res.set("Cache-Control", `public, max-age=${maxAgeSec}, stale-while-revalidate=${swrSec}`);
@@ -316,11 +337,19 @@ async function requireAuth(req, res, next) {
     const cachedUser = authCacheGet(token);
     if (cachedUser) {
       req.user = { ...cachedUser };
+      const cachedEnsure = ensureUserCacheGet(req.user.id);
+      if (cachedEnsure) {
+        req.user.role = cachedEnsure.role || req.user.role;
+        const suspended = cachedEnsure.status === "suspended" || (cachedEnsure.suspendedUntil && new Date(cachedEnsure.suspendedUntil) > new Date());
+        if (suspended) return res.status(403).json({ error: "Account suspended." });
+        return next();
+      }
       const ensured = await ensureUserExists(req);
       if (ensured) {
         req.user.role = ensured.role;
+        ensureUserCacheSet(ensured);
         const suspended = ensured.status === "suspended" || (ensured.suspendedUntil && new Date(ensured.suspendedUntil) > new Date());
-        if (suspended) return res.status(403).json({ error: "본인 수업의 다시보기만 삭제할 수 있습니다." });
+        if (suspended) return res.status(403).json({ error: "Account suspended." });
       }
       return next();
     }
@@ -337,13 +366,21 @@ async function requireAuth(req, res, next) {
     };
     authCacheSet(token, req.user);
 
-    // Prisma User 보장 + 최신 역할/정지 상태 반영
+    // Prisma User ?????? + ?????? ????/???? ????? ??????
+    const cachedEnsure = ensureUserCacheGet(req.user.id);
+    if (cachedEnsure) {
+      req.user.role = cachedEnsure.role || req.user.role;
+      const suspended = cachedEnsure.status === "suspended" || (cachedEnsure.suspendedUntil && new Date(cachedEnsure.suspendedUntil) > new Date());
+      if (suspended) return res.status(403).json({ error: "Account suspended." });
+      return next();
+    }
     const ensured = await ensureUserExists(req);
     if (ensured) {
-      // DB에 더 최신 역할/정지 상태가 있으면 이를 우선
+      // DB?????????? ????/???? ???????? ???????????? ?????
       req.user.role = ensured.role;
+      ensureUserCacheSet(ensured);
       const suspended = ensured.status === "suspended" || (ensured.suspendedUntil && new Date(ensured.suspendedUntil) > new Date());
-      if (suspended) return res.status(403).json({ error: "정지된 계정입니다. 관리자에게 문의하세요." });
+      if (suspended) return res.status(403).json({ error: "Account suspended." });
     }
 
     return next();

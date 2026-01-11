@@ -527,6 +527,7 @@ function parseSupabaseStorageUrl(urlStr) {
 
 const STORAGE_SIGN_TTL_MS = 1000 * 60 * 20;
 const storageSignedCache = new Map();
+const brokenThumbs = new Set();
 
 function getCachedSignedUrl(key) {
   const hit = storageSignedCache.get(key);
@@ -1131,6 +1132,15 @@ async function hydrateThumb(el, raw) {
   if (el.dataset.thumbHydrated === "1") return;
   el.dataset.thumbHydrated = "1";
   if (!raw) { el.src = FALLBACK_THUMB; return; }
+  const trimmed = String(raw).trim();
+  if (brokenThumbs.has(trimmed)) {
+    el.src = FALLBACK_THUMB;
+    return;
+  }
+  if (!isHttpLike(trimmed) && !trimmed.startsWith("data:") && !trimmed.includes("/")) {
+    el.src = FALLBACK_THUMB;
+    return;
+  }
   if (isHttpLike(raw) || raw.startsWith("data:")) { el.src = raw; }
 
   const retryCnt = Number(el.getAttribute("data-thumb-retry") || "0");
@@ -1138,6 +1148,7 @@ async function hydrateThumb(el, raw) {
     el.dataset.thumbErrorBound = "1";
     el.addEventListener("error", async () => {
       if (el.dataset.thumbFallback === "1") return;
+      brokenThumbs.add(trimmed);
       try {
         const refreshed = await resolveStorageUrl(raw);
         if (refreshed && refreshed !== el.src) {
