@@ -1244,7 +1244,7 @@ const startServer = async () => {
     console.error(err);
     res.status(500).json({ error: "정지 처리 실패" });
   }
-});
+};
 
 app.post("/api/admin/users/:id/unsuspend", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -1426,7 +1426,7 @@ app.get(["/class_detail/:id", "/live_class/:id", "/classes/:id"], (req, res, nex
   if (fs.existsSync(file)) {
     return sendHtml(res, file);
   }
-};
+});
 
 // Start the server
 startServer();
