@@ -1178,7 +1178,8 @@ function ensureProtectedData() {
               <div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">
                 ${a.submissions.map(s => {
                   const when = new Date(s.submittedAt || s.at || s.updatedAt || Date.now()).toLocaleString("ko-KR");
-                  const who = escapeHtml(s.student?.name || s.studentName || s.studentEmail || s.studentId || "학생");
+                  const whoRaw = s.student?.name || s.student?.email || s.studentName || s.studentEmail || "";
+                  const who = escapeHtml(whoRaw || "학생");
                   const txt = escapeHtml(s.content || s.text || "");
                   const fUrl = s.fileUrl || s.fileData || "";
                   const fName = s.fileName || inferFileName(fUrl) || "첨부 파일";

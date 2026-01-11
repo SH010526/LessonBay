@@ -1583,14 +1583,40 @@ function convertEnrollmentArrayToMap(arr) {
     if (!raw || typeof raw !== "object") continue;
 
     const e = { ...raw };
-    const classId = String(e.classId || e.courseId || e.class || e.course || e.id || "");
+    const classId = String(
+      e.classId ||
+      e.class?.id ||
+      e.courseId ||
+      e.class ||
+      e.course ||
+      e.id ||
+      ""
+    );
     if (!classId) continue;
     e.classId = classId;
 
     const snap = e.userSnapshot && typeof e.userSnapshot === "object" ? e.userSnapshot : null;
-    const userId = String(e.userId || e.uid || (snap && (snap.id || snap.uid)) || "");
-    const userEmail = normalizeEmail(e.userEmail || e.email || (snap && snap.email) || "");
-    const userName = String(e.userName || e.name || (snap && snap.name) || "").trim();
+    const userId = String(
+      e.userId ||
+      e.uid ||
+      e.user?.id ||
+      (snap && (snap.id || snap.uid)) ||
+      ""
+    );
+    const userEmail = normalizeEmail(
+      e.userEmail ||
+      e.email ||
+      e.user?.email ||
+      (snap && snap.email) ||
+      ""
+    );
+    const userName = String(
+      e.userName ||
+      e.name ||
+      e.user?.name ||
+      (snap && snap.name) ||
+      ""
+    ).trim();
 
     if (userId) e.userId = userId;
     if (userEmail) e.userEmail = userEmail;
