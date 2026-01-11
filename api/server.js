@@ -1730,6 +1730,9 @@ app.delete("/api/replays/:id", requireAuth, requireTeacher, async (req, res) => 
 // Static frontend (online_class_platform_v4)
 const clientDir = path.join(__dirname, "..", "online_class_platform_v4");
 
+// Avoid favicon 404 noise in console
+app.get("/favicon.ico", (_req, res) => res.status(204).end());
+
 // Serve root and static assets
 app.get("/", (_req, res) => sendHtml(res, path.join(clientDir, "index.html")));
 app.use(express.static(clientDir));
