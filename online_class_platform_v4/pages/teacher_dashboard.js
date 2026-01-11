@@ -8,21 +8,24 @@ function loadTeacherDashboard() {
     if (!user) { navigateTo("login.html", { replace: true }); return; }
     if (user.role !== "teacher") { navigateTo("student_dashboard.html", { replace: true }); return; }
 
-    let classes = getClasses();
-    if (!classes.length) {
-      try {
-        const refreshed = await apiGet("/api/classes", { silent: true, cache: "no-store" });
-        if (Array.isArray(refreshed)) {
-          const normalized = refreshed.map(c => ({
-            ...c,
-            teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
-            teacherId: c.teacherId || c.teacher?.id || "",
-            thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
-          }));
-          setClasses(normalized);
-          classes = normalized;
-        }
-      } catch (_) {}
+    // Always fetch the latest class list to ensure data is fresh.
+    let classes = [];
+    try {
+      const refreshed = await apiGet("/api/classes", { silent: true, cache: "no-store" });
+      if (Array.isArray(refreshed)) {
+        const normalized = refreshed.map(c => ({
+          ...c,
+          teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
+          teacherId: c.teacherId || c.teacher?.id || "",
+          thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+        }));
+        setClasses(normalized); // Update the global state
+        classes = normalized;
+      }
+    } catch (err) {
+      console.error("Failed to load classes for teacher dashboard:", err);
+      // Fallback to local cache only if API fails
+      classes = getClasses();
     }
     const mine = classes.filter(c => isOwnerTeacherForClass(user, c));
 
