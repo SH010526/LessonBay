@@ -899,6 +899,8 @@ try {
 const OLD_USER_KEYS = ["currentUser", "LessonBay_currentUser", "user", "authUser"];
 const OLD_USERS_KEYS = ["users", "LessonBay_users"];
 const OLD_CLASSES_KEYS = ["classes", "LessonBay_classes", "classData"];
+const LEGACY_CLASS_KEYS = [K.CLASSES, ...OLD_CLASSES_KEYS];
+let legacyClassRestoreAttempted = false;
 const OLD_ENROLL_KEYS = ["enrollments", "LessonBay_enrollments"];
 const HTML_ROUTE_BASES = new Set([
   "index",
@@ -930,6 +932,157 @@ const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
 function safeParse(json, fallback) {
   try { return JSON.parse(json); } catch { return fallback; }
+}
+function classSignature(c) {
+  if (!c) return "";
+  const title = String(c.title || "").trim().toLowerCase();
+  const category = String(c.category || "").trim().toLowerCase();
+  const description = String(c.description || "").trim().toLowerCase();
+  const weeklyPrice = Number(c.weeklyPrice) || 0;
+  const monthlyPrice = Number(c.monthlyPrice) || 0;
+  return `${title}|${category}|${description}|${weeklyPrice}|${monthlyPrice}`;
+}
+function normalizeLegacyClass(raw, index = 0) {
+  if (!raw || typeof raw !== "object") return null;
+  const title = String(raw.title || raw.name || "").trim();
+  if (!title) return null;
+  const id = String(raw.id || raw.classId || raw.courseId || `legacy_${index}`);
+  const category = String(raw.category || raw.cat || "").trim();
+  const description = String(raw.description || raw.desc || "").trim();
+  const weeklyPrice = Number(raw.weeklyPrice ?? raw.weekPrice ?? raw.weekly ?? 0) || 0;
+  const monthlyPrice = Number(raw.monthlyPrice ?? raw.monthPrice ?? raw.monthly ?? 0) || 0;
+  const thumb = raw.thumbUrl || raw.thumb || raw.thumbnail || FALLBACK_THUMB;
+  const teacher = raw.teacher || raw.teacherName || raw.teacherEmail || raw.instructor || "-";
+  const teacherId = raw.teacherId || raw.ownerId || "";
+  return {
+    id,
+    title,
+    category,
+    description,
+    weeklyPrice,
+    monthlyPrice,
+    thumb,
+    teacher,
+    teacherId,
+  };
+}
+function mergeClassLists(primary, extra) {
+  const base = Array.isArray(primary) ? primary : [];
+  const add = Array.isArray(extra) ? extra : [];
+  if (!add.length) return base.slice();
+  const byId = new Set(base.map((c) => String(c.id || "")));
+  const bySig = new Set(base.map(classSignature));
+  const merged = base.slice();
+  add.forEach((c) => {
+    if (!c) return;
+    const id = String(c.id || "");
+    const sig = classSignature(c);
+    if ((id && byId.has(id)) || (sig && bySig.has(sig))) return;
+    merged.push(c);
+    if (id) byId.add(id);
+    if (sig) bySig.add(sig);
+  });
+  return merged;
+}
+function readLegacyClassesFromStorage() {
+  if (typeof localStorage === "undefined") return [];
+  const merged = [];
+  const seen = new Set();
+  LEGACY_CLASS_KEYS.forEach((key) => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const parsed = safeParse(raw, null);
+      const list = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.classes)
+          ? parsed.classes
+          : [];
+      list.forEach((item, index) => {
+        const normalized = normalizeLegacyClass(item, index);
+        if (!normalized) return;
+        const sig = classSignature(normalized);
+        const id = String(normalized.id || "");
+        if ((id && seen.has(id)) || (sig && seen.has(sig))) return;
+        merged.push(normalized);
+        if (id) seen.add(id);
+        if (sig) seen.add(sig);
+      });
+    } catch (_) {}
+  });
+  return merged;
+}
+function clearLegacyClassesFromStorage() {
+  if (typeof localStorage === "undefined") return;
+  LEGACY_CLASS_KEYS.forEach((key) => {
+    try { localStorage.removeItem(key); } catch (_) {}
+  });
+}
+async function maybeRestoreLegacyClasses(legacyClasses, user) {
+  if (legacyClassRestoreAttempted) return false;
+  legacyClassRestoreAttempted = true;
+  if (!Array.isArray(legacyClasses) || !legacyClasses.length) return false;
+  if (!user || user.role !== "teacher") return false;
+
+  const token = await getAuthToken();
+  if (!token) return false;
+
+  let remote = [];
+  try {
+    remote = await apiGet("/api/classes", { silent: true });
+  } catch (_) {
+    remote = [];
+  }
+  const normalizedRemote = (Array.isArray(remote) ? remote : []).map(c => ({
+    ...c,
+    teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
+    teacherId: c.teacherId || c.teacher?.id || "",
+    thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+  }));
+  const remoteMine = normalizedRemote.filter((c) => isOwnerTeacherForClass(user, c));
+  const remoteSigs = new Set(remoteMine.map(classSignature));
+  const missing = legacyClasses.filter((c) => {
+    const sig = classSignature(c);
+    return sig && !remoteSigs.has(sig);
+  });
+  if (!missing.length) return false;
+
+  let createdCount = 0;
+  for (const c of missing) {
+    try {
+      await apiPost("/api/classes", {
+        title: c.title,
+        category: c.category || "",
+        description: c.description || "",
+        weeklyPrice: Number(c.weeklyPrice) || 0,
+        monthlyPrice: Number(c.monthlyPrice) || 0,
+        thumbUrl: c.thumb || c.thumbUrl || null,
+      });
+      createdCount += 1;
+    } catch (e) {
+      console.error("legacy class restore failed", e);
+    }
+  }
+
+  if (createdCount === missing.length) {
+    clearLegacyClassesFromStorage();
+  }
+
+  try {
+    const refreshed = await apiGet("/api/classes", { silent: true });
+    if (Array.isArray(refreshed)) {
+      const normalized = (refreshed || []).map(c => ({
+        ...c,
+        teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
+        teacherId: c.teacherId || c.teacher?.id || "",
+        thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
+      }));
+      const merged = mergeClassLists(normalized, legacyClasses);
+      if (merged.length) setClasses(merged);
+    }
+  } catch (_) {}
+
+  return createdCount > 0;
 }
 function won(n) { return "\u20A9" + (Number(n) || 0).toLocaleString("ko-KR"); }
 function getPath() {
@@ -1852,6 +2005,7 @@ async function loadLocalSampleClasses() {
 async function ensureSeedData() {
   const sessionPromise = syncLocalUserFromSupabaseSession().catch(() => {});
   const detailOnly = !!document.getElementById("detailRoot") && !document.getElementById("classGrid") && !document.getElementById("homePopular");
+  const legacyClasses = readLegacyClassesFromStorage();
 
   const rerenderVisible = () => {
     if (typeof loadHomePopular === "function" && $("#homePopular")) loadHomePopular(); // 홈 인기 수업
@@ -1867,19 +2021,23 @@ async function ensureSeedData() {
   if (hasCachedClasses) {
     setClasses(cached);
   } else if (!detailOnly) {
-    const builtin = getBuiltinClasses();
-    if (builtin.length) setClasses(builtin);
-    scheduleIdleTask(async () => {
-      try {
-        const local = await loadLocalSampleClasses();
-        if (Array.isArray(local) && local.length) {
-          setClasses(local);
-          rerenderVisible();
+    if (legacyClasses.length) {
+      setClasses(legacyClasses);
+    } else {
+      const builtin = getBuiltinClasses();
+      if (builtin.length) setClasses(builtin);
+      scheduleIdleTask(async () => {
+        try {
+          const local = await loadLocalSampleClasses();
+          if (Array.isArray(local) && local.length) {
+            setClasses(local);
+            rerenderVisible();
+          }
+        } catch (e) {
+          console.error("local sample classes load failed", e);
         }
-      } catch (e) {
-        console.error("local sample classes load failed", e);
-      }
-    });
+      });
+    }
   } else {
     setClasses([]);
   }
@@ -1910,16 +2068,17 @@ async function ensureSeedData() {
     const timeoutMs = attempt === 0 ? 4000 : 8000;
     return apiGet("/api/classes", { silent: true, timeout: timeoutMs, tolerateTimeout: true })
       .then((classes) => {
-        if (!Array.isArray(classes) || !classes.length) return false;
+        if (!Array.isArray(classes)) return false;
         const normalized = (classes || []).map(c => ({
           ...c,
           teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
           teacherId: c.teacherId || c.teacher?.id || "",
           thumb: c.thumbUrl || c.thumb || FALLBACK_THUMB,
         }));
-        if (normalized.length) setClasses(normalized);
+        const merged = legacyClasses.length ? mergeClassLists(normalized, legacyClasses) : normalized;
+        if (merged.length) setClasses(merged);
         rerenderVisible();
-        return true;
+        return normalized.length > 0;
       })
       .catch((e) => {
         if (attempt >= 2) console.error("classes fetch failed", e);
@@ -1950,6 +2109,9 @@ async function ensureSeedData() {
     try {
       const u = getUser();
       if (u) {
+        if (legacyClasses.length) {
+          await maybeRestoreLegacyClasses(legacyClasses, u);
+        }
         const cachedEnroll = loadCachedEnrollments(u);
         const hasEnroll = Array.isArray(cachedEnroll) && cachedEnroll.length > 0;
         if (!hasEnroll) {
