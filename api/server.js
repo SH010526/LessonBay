@@ -996,7 +996,7 @@ app.get("/api/me/enrollments", requireAuth, async (req, res) => {
     const list = await prisma.enrollment.findMany({
       where: { userId: req.user.id },
       orderBy: { createdAt: "desc" },
-      include: { class: true },
+      include: { class: { select: CLASS_SUMMARY_SELECT } }, // Optimized selection
     });
     cacheSet(cacheKey, list, 20 * 1000);
     setCacheHeaders(res, 20, 60);
