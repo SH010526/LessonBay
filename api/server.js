@@ -117,12 +117,17 @@ app.get("/api/health", (_req, res) => {
 const PORT = process.env.PORT || 3000;
 const kickedMap = new Map(); // classId -> Map<userId, expiresAt>
 const responseCache = new Map(); // key -> { value, expiresAt }
-const CLASS_LIST_CACHE_TTL_MS = 5 * 60 * 1000;
+const CLASS_LIST_CACHE_TTL_MS = 5 * 60 * 1000;// 의미 : 5분 동안 캐시 유지
 const CLASS_DETAIL_CACHE_TTL_MS = 2 * 60 * 1000;
 const REPLAYS_CACHE_TTL_MS = 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 60 * 1000;
 const AUTH_CACHE_TTL_MS = 60 * 1000;
 const STORAGE_SIGN_CACHE_TTL_MS = 20 * 60 * 1000;
+const KEEP_WARM_URL = String(process.env.KEEP_WARM_URL || "").trim();
+const KEEP_WARM_INTERVAL_MS = Math.max(10_000, Number(process.env.KEEP_WARM_INTERVAL_MS) || 5 * 60 * 1000);
+const WARMUP_CLASS_LIMIT = Number.isFinite(Number(process.env.WARMUP_CLASS_LIMIT))
+  ? Math.max(0, Number(process.env.WARMUP_CLASS_LIMIT))
+  : 0;
 const CLASS_SUMMARY_SELECT = {
   id: true,
   title: true,
@@ -178,6 +183,32 @@ function cacheDel(key) {
 function cacheDelPrefix(prefix) {
   for (const key of responseCache.keys()) {
     if (key.startsWith(prefix)) responseCache.delete(key);
+  }
+}
+
+let keepWarmTimer = null;
+function startKeepWarm() {
+  if (!KEEP_WARM_URL || keepWarmTimer) return;
+  if (typeof fetch !== "function") return;
+  const ping = () => fetch(KEEP_WARM_URL, { cache: "no-store" }).catch(() => {});
+  ping();
+  keepWarmTimer = setInterval(() => {
+    ping();
+  }, KEEP_WARM_INTERVAL_MS);
+}
+
+async function prewarmCaches() {
+  try {
+    const limit = WARMUP_CLASS_LIMIT > 0 ? Math.min(WARMUP_CLASS_LIMIT, 200) : 0;
+    const cacheKey = `classes:list:${limit || "all"}`;
+    const list = await prisma.class.findMany({
+      orderBy: { createdAt: "desc" },
+      ...(limit ? { take: limit } : {}),
+      select: CLASS_SUMMARY_SELECT,
+    });
+    cacheSet(cacheKey, list, CLASS_LIST_CACHE_TTL_MS);
+  } catch (err) {
+    console.error("prewarm caches failed:", err);
   }
 }
 
@@ -1848,6 +1879,10 @@ app.get(["/class_detail/:id", "/live_class/:id", "/classes/:id"], (req, res, nex
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  setTimeout(() => {
+    startKeepWarm();
+    prewarmCaches();
+  }, 1000);
 });
 
 module.exports = app;
