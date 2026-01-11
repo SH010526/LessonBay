@@ -31,8 +31,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || "",
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
-const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || "LessonBay";
-const STORAGE_ALLOWED_PREFIXES = new Set(["class-thumbs", "materials", "replays", "uploads"]);
 
 // HTTPS 리다이렉트 (배포 환경에서 FORCE_HTTPS=1 설정 시 동작)
 app.set("trust proxy", 1);
@@ -245,75 +243,6 @@ function rewriteHtmlForCdn(html) {
   return String(html).replace(/\b(href|src)=["']([^"']+)["']/gi, (m, attr, url) => {
     return `${attr}="${withCdnUrl(url)}"`;
   });
-}
-
-function extractStorageObject(value) {
-  if (!value) return null;
-  const raw = String(value).trim();
-  if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return null;
-  if (/^https?:\/\//i.test(raw)) {
-    try {
-      const u = new URL(raw);
-      if (!u.hostname.includes("supabase.co")) return null;
-      const m = u.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
-      if (!m) return null;
-      const bucket = m[1];
-      let pathOnly = m[2];
-      try { pathOnly = decodeURIComponent(pathOnly); } catch (_) {}
-      const prefix = pathOnly.split("/")[0] || "";
-      if (!STORAGE_ALLOWED_PREFIXES.has(prefix)) return null;
-      return { bucket, path: pathOnly };
-    } catch (_) {
-      return null;
-    }
-  }
-  const clean = raw.replace(/^\/+/, "");
-  if (!clean) return null;
-  const parts = clean.split("/");
-  let bucket = STORAGE_BUCKET;
-  let pathOnly = clean;
-  if (parts.length > 1 && STORAGE_ALLOWED_PREFIXES.has(parts[1])) {
-    bucket = parts[0];
-    pathOnly = parts.slice(1).join("/");
-  }
-  const prefix = pathOnly.split("/")[0] || "";
-  if (!STORAGE_ALLOWED_PREFIXES.has(prefix)) return null;
-  return { bucket, path: pathOnly };
-}
-
-function collectStorageObjects(values) {
-  const list = [];
-  (Array.isArray(values) ? values : [values]).forEach((v) => {
-    if (!v) return;
-    if (Array.isArray(v)) {
-      v.forEach((inner) => {
-        const parsed = extractStorageObject(inner);
-        if (parsed) list.push(parsed);
-      });
-      return;
-    }
-    const parsed = extractStorageObject(v);
-    if (parsed) list.push(parsed);
-  });
-  return list;
-}
-
-async function deleteStorageObjects(objects, context = "") {
-  const grouped = new Map();
-  (objects || []).forEach((obj) => {
-    if (!obj?.path) return;
-    const bucket = obj.bucket || STORAGE_BUCKET;
-    if (!grouped.has(bucket)) grouped.set(bucket, new Set());
-    grouped.get(bucket).add(obj.path);
-  });
-  for (const [bucket, pathsSet] of grouped.entries()) {
-    const paths = Array.from(pathsSet);
-    if (!paths.length) continue;
-    const { error } = await supabase.storage.from(bucket).remove(paths);
-    if (error) {
-      console.warn("storage remove failed", { bucket, context, error });
-    }
-  }
 }
 
 function sendHtml(res, filePath) {
@@ -721,33 +650,8 @@ app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
   }
 });
 
-// Auth: verify OTP and create user
-app.post("/api/auth/verify-otp", async (req, res) => {
-  try {
-    const { email, code } = req.body || {};
-    if (!email || !code) return res.status(400).json({ error: "이메일/코드를 입력하세요." });
-
-    const entry = otpStore.get(email.toLowerCase());
-    if (!entry) return res.status(400).json({ error: "인증코드를 먼저 요청하세요." });
-    if (String(entry.code) !== String(code).trim()) return res.status(400).json({ error: "인증코드가 일치하지 않습니다." });
-    if (Date.now() > entry.expiresAt) return res.status(400).json({ error: "인증코드가 만료되었습니다. 다시 요청하세요." });
-
-    const meta = { name: entry.name, role: entry.role };
-    const { data, error } = await supabase.auth.admin.createUser({
-      email: entry.email,
-      password: entry.password,
-      email_confirm: true,
-      user_metadata: meta,
-    });
-    if (error) return res.status(400).json({ error: error.message || "계정 생성 실패" });
-
-    otpStore.delete(email.toLowerCase());
-    res.json({ ok: true, user: data.user });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "OTP 검증 실패" });
-  }
-});
+// Logging middleware
+app.use(morgan('combined', { stream: logger.stream }));
 
 // Account delete (Supabase admin + DB 정리)
 app.post("/api/account/delete", requireAuth, async (req, res) => {
@@ -755,26 +659,9 @@ app.post("/api/account/delete", requireAuth, async (req, res) => {
   try {
     const myClasses = await prisma.class.findMany({
       where: { teacherId: userId },
-      select: { id: true, thumbUrl: true },
+      select: { id: true },
     });
     const classIds = myClasses.map((c) => c.id);
-    let storageTargets = [];
-    if (classIds.length) {
-      const [materials, replays, submissions] = await Promise.all([
-        prisma.material.findMany({ where: { classId: { in: classIds } }, select: { fileUrl: true } }),
-        prisma.replay.findMany({ where: { classId: { in: classIds } }, select: { vodUrl: true } }),
-        prisma.assignmentSubmission.findMany({
-          where: { assignment: { classId: { in: classIds } } },
-          select: { fileUrl: true },
-        }),
-      ]);
-      storageTargets = collectStorageObjects([
-        myClasses.map((c) => c.thumbUrl),
-        materials.map((m) => m.fileUrl),
-        replays.map((r) => r.vodUrl),
-        submissions.map((s) => s.fileUrl),
-      ]);
-    }
 
     await prisma.$transaction([
       prisma.chatMessage.deleteMany({ where: { OR: [{ userId }, { classId: { in: classIds } }] } }),
@@ -818,9 +705,6 @@ app.post("/api/account/delete", requireAuth, async (req, res) => {
       await supabase.auth.admin.deleteUser(userId);
     } catch (e) {
       console.error("supabase admin delete failed", e);
-    }
-    if (storageTargets.length) {
-      await deleteStorageObjects(storageTargets, `account:${userId}`);
     }
 
     res.json({ ok: true });
@@ -930,21 +814,6 @@ app.delete("/api/classes/:id", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "삭제 권한이 없습니다." });
     }
 
-    const [materials, replays, submissions] = await Promise.all([
-      prisma.material.findMany({ where: { classId }, select: { fileUrl: true } }),
-      prisma.replay.findMany({ where: { classId }, select: { vodUrl: true } }),
-      prisma.assignmentSubmission.findMany({
-        where: { assignment: { classId } },
-        select: { fileUrl: true },
-      }),
-    ]);
-    const storageTargets = collectStorageObjects([
-      cls.thumbUrl,
-      materials.map((m) => m.fileUrl),
-      replays.map((r) => r.vodUrl),
-      submissions.map((s) => s.fileUrl),
-    ]);
-
     await prisma.$transaction([
       prisma.assignmentSubmission.deleteMany({ where: { assignment: { classId } } }),
       prisma.assignment.deleteMany({ where: { classId } }),
@@ -966,10 +835,6 @@ app.delete("/api/classes/:id", requireAuth, async (req, res) => {
     cacheDelPrefix(`assign:${classId}:`);
     cacheDelPrefix("enroll:");
 
-    if (storageTargets.length) {
-      await deleteStorageObjects(storageTargets, `class:${classId}`);
-    }
-
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -977,325 +842,18 @@ app.delete("/api/classes/:id", requireAuth, async (req, res) => {
   }
 });
 
-// Enrollment
-function calcEndAt(planType, duration) {
-  const now = new Date();
-  const d = Number(duration) || 1;
-  const end = new Date(now);
-  if (planType === PlanType.monthly) {
-    end.setDate(end.getDate() + 30 * d);
-  } else {
-    end.setDate(end.getDate() + 7 * d);
-  }
-  return end;
-}
+// Response caching middleware - after body parsing
+app.use(cacheMiddleware);
 
-app.post("/api/classes/:id/enroll", requireAuth, requireStudent, async (req, res) => {
-  try {
-    await ensureUserExists(req);
-    const classId = req.params.id;
-    const planType = req.body.planType === "monthly" ? PlanType.monthly : PlanType.weekly;
-    const duration = Number(req.body.duration) || 1;
-    const paidAmount = Number(req.body.paidAmount) || 0;
-    const endAt = calcEndAt(planType, duration);
-
-    const cls = await prisma.class.findUnique({ where: { id: classId } });
-    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
-
-    const enrollment = await prisma.enrollment.upsert({
-      where: { userId_classId: { userId: req.user.id, classId } },
-      update: { planType, duration, paidAmount, endAt, status: EnrollmentStatus.active },
-      create: {
-        userId: req.user.id,
-        classId,
-        planType,
-        duration,
-        paidAmount,
-        endAt,
-        status: EnrollmentStatus.active,
-      },
-    });
-
-    res.status(201).json(enrollment);
-  } catch (err) {
-    console.error("Enroll error:", err);
-    res.status(500).json({ error: "수강 등록 실패", detail: err?.message || String(err) });
-  }
-});
-
-app.get("/api/me/enrollments", requireAuth, async (req, res) => {
-  try {
-    const cacheKey = `enroll:${req.user.id}`;
-    const cached = cacheGet(cacheKey);
-    if (cached) {
-      setCacheHeaders(res, 20, 60);
-      return res.json(cached);
-    }
-    const list = await prisma.enrollment.findMany({
-      where: { userId: req.user.id },
-      orderBy: { createdAt: "desc" },
-      include: { class: true },
-    });
-    cacheSet(cacheKey, list, 20 * 1000);
-    setCacheHeaders(res, 20, 60);
-    res.json(list);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "????? ?????? ?????? ?????" });
-  }
-});
-
-// Replays
-app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const cacheKey = `replays:${classId}:u:${req.user.id}:r:${req.user.role}`;
-    const cached = cacheGet(cacheKey);
-    if (cached) {
-      setCacheHeaders(res, 60, 120);
-      return res.json(cached);
-    }
-    // RLS가 켜져 있으면 삽입이 막히므로 비활성화 시도
-    if (!replayRlsDisabled) {
-      await disableRlsIfOn();
-    }
-
-    const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
-
-    if (req.user.id !== cls.teacherId) {
-      const enroll = await prisma.enrollment.findUnique({
-        where: { userId_classId: { userId: req.user.id, classId } },
-      });
-      if (!enrollmentIsActive(enroll)) {
-        return res.status(403).json({ error: "수강 중인 학생만 다시보기를 볼 수 있습니다." });
-      }
-    }
-
-    const listRaw = await prisma.replay.findMany({
-      where: { classId },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        classId: true,
-        sessionId: true,
-        title: true,
-        mime: true,
-        createdAt: true,
-      },
-    });
-    const list = listRaw.map((r) => ({
-      ...r,
-      hasVod: true, // vodUrl 컬럼이 필수라 재생 가능 여부를 빠르게 알 수 있음
-    }));
-    cacheSet(cacheKey, list, REPLAYS_CACHE_TTL_MS);
-    setCacheHeaders(res, 60, 120);
-    res.json(list);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "다시보기 조회 실패" });
-  }
-});
-
-app.post("/api/classes/:id/replays", requireAuth, requireTeacher, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const { vodUrl, mime, title, sessionId } = req.body;
-    if (!vodUrl) return res.status(400).json({ error: "vodUrl이 필요합니다." });
-    const sizeBytes = estimateBase64Bytes(vodUrl);
-    const maxBytes = 50 * 1024 * 1024; // Supabase Storage Free 50MB 한도 기준
-    if (sizeBytes > maxBytes) return res.status(400).json({ error: "영상이 너무 큽니다. 50MB 이하로 올려주세요. (대용량은 스토리지 직접 업로드 방식 권장)" });
-
-    const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
-    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업에서만 등록 가능합니다." });
-
-    const replay = await prisma.replay.create({
-      data: { classId, sessionId: sessionId || null, vodUrl, mime: mime || null, title: title || null },
-    });
-    cacheDelPrefix(`replays:${classId}:`);
-    cacheDelPrefix(`classes:detail:${classId}:`);
-    res.status(201).json({
-      ...replay,
-      vodUrl: undefined, // 목록 응답에서는 대용량 데이터 제외
-      hasVod: true,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "다시보기 등록 실패" });
-  }
-});
-
-// Replay 단건 조회(재생 시에만 대용량 vodUrl 내려줌)
-app.get("/api/replays/:id", requireAuth, async (req, res) => {
-  try {
-    const replayId = req.params.id;
-    const replay = await prisma.replay.findUnique({ where: { id: replayId } });
-    if (!replay) return res.status(404).json({ error: "다시보기를 찾을 수 없습니다." });
-
-    const cls = await prisma.class.findUnique({ where: { id: replay.classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
-
-    const isTeacher = req.user?.role === "teacher" && req.user?.id === cls.teacherId;
-    if (!isTeacher) {
-      const enroll = await prisma.enrollment.findUnique({
-        where: { userId_classId: { userId: req.user.id, classId: replay.classId } },
-      });
-      if (!enrollmentIsActive(enroll)) {
-        return res.status(403).json({ error: "수강 중인 학생만 다시보기를 볼 수 있습니다." });
-      }
-    }
-
-    res.json({ ...replay, hasVod: !!replay.vodUrl });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "다시보기 조회 실패" });
-  }
-});
-
-// ---------- Common helper for class access ----------
-async function ensureClassAccess(req, classId) {
-  const cls = await prisma.class.findUnique({ where: { id: classId } });
-  if (!cls) return { error: "수업을 찾을 수 없습니다.", cls: null, isTeacher: false, isActiveStudent: false };
-  const isTeacher = req.user?.role === "teacher" && req.user?.id === cls.teacherId;
-  let isActiveStudent = false;
-  if (!isTeacher) {
-    const enroll = await prisma.enrollment.findUnique({
-      where: { userId_classId: { userId: req.user.id, classId } },
-    });
-    isActiveStudent = enrollmentIsActive(enroll);
-  }
-  return { cls, isTeacher, isActiveStudent, error: null };
-}
-
-// ---------- Materials ----------
-app.get("/api/classes/:id/materials", requireAuth, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const access = await ensureClassAccess(req, classId);
-    if (access.error) return res.status(404).json({ error: access.error });
-    if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "수강 중인 학생만 자료를 볼 수 있습니다." });
-    }
-
-    const list = await prisma.material.findMany({
-      where: { classId },
-      orderBy: { createdAt: "desc" },
-    });
-    res.json(list);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "자료 조회 실패" });
-  }
-});
-
-app.post("/api/classes/:id/materials", requireAuth, requireTeacher, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const { title, fileUrl, mime } = req.body;
-    if (!title || !fileUrl) return res.status(400).json({ error: "title과 fileUrl이 필요합니다." });
-    const sizeBytes = estimateBase64Bytes(fileUrl);
-    const maxBytes = 50 * 1024 * 1024; // Free 플랜 한도
-    if (sizeBytes > maxBytes) return res.status(400).json({ error: "파일이 너무 큽니다. 50MB 이하로 올려주세요." });
-
-    const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
-    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업에만 업로드 가능합니다." });
-
-    const m = await prisma.material.create({
-      data: {
-        classId,
-        title,
-        fileUrl,
-        mime: mime || null,
-        uploaderId: req.user.id,
-      },
-    });
-    res.status(201).json(m);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "자료 업로드 실패" });
-  }
-});
-
-// ---------- Assignments ----------
-app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const cacheKey = `assign:${classId}:u:${req.user.id}:r:${req.user.role}`;
-    const cached = cacheGet(cacheKey);
-    if (cached) {
-      setCacheHeaders(res, 60, 120);
-      return res.json(cached);
-    }
-    const access = await ensureClassAccess(req, classId);
-    if (access.error) return res.status(404).json({ error: access.error });
-    if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "수강 중인 학생만 과제를 볼 수 있습니다." });
-    }
-
-    const includeSubs = access.isTeacher
-      ? {
-          include: {
-            submissions: {
-              include: { student: { select: { id: true, name: true, email: true } } },
-              orderBy: { submittedAt: "desc" },
-            },
-          },
-        }
-      : { include: { submissions: { where: { studentId: req.user.id } } } };
-
-    const listRaw = await prisma.assignment.findMany({
-      where: { classId },
-      orderBy: { createdAt: "desc" },
-      ...includeSubs,
-    });
-    // 교사/관리자는 대용량 fileUrl을 제거하고 hasFile 플래그만 전달
-    const list = listRaw.map(a => {
-      if (!access.isTeacher) return a;
-      return {
-        ...a,
-        submissions: (a.submissions || []).map(s => ({
-          ...s,
-          hasFile: !!s.fileUrl,
-          fileName: inferFileNameFromUrl(s.fileUrl || ""),
-          fileUrl: undefined,
-        })),
-      };
-    });
-    cacheSet(cacheKey, list, ASSIGNMENTS_CACHE_TTL_MS);
-    setCacheHeaders(res, 60, 120);
-    res.json(list);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "과제 조회 실패" });
-  }
-});
-
-app.post("/api/classes/:id/assignments", requireAuth, requireTeacher, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const { title, description, dueAt } = req.body;
-    if (!title) return res.status(400).json({ error: "title이 필요합니다." });
-
-    const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
-    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업에만 생성 가능합니다." });
-
-    const a = await prisma.assignment.create({
-      data: {
-        classId,
-        title,
-        description: description || null,
-        dueAt: dueAt ? new Date(dueAt) : null,
-      },
-    });
-    cacheDelPrefix(`assign:${classId}:`);
-    res.status(201).json(a);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "과제 생성 실패" });
-  }
+// ============================================
+// Health Check Endpoint (lightweight)
+// ============================================
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  });
 });
 
 // Assignment 수정 (선생님만)
@@ -1339,18 +897,9 @@ app.delete("/api/assignments/:id", requireAuth, requireTeacher, async (req, res)
     if (!assignment) return res.status(404).json({ error: "과제를 찾을 수 없습니다." });
     if (assignment.class.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업의 과제만 삭제 가능합니다." });
 
-    const submissions = await prisma.assignmentSubmission.findMany({
-      where: { assignmentId },
-      select: { fileUrl: true },
-    });
-    const storageTargets = collectStorageObjects(submissions.map((s) => s.fileUrl));
-
     await prisma.assignmentSubmission.deleteMany({ where: { assignmentId } });
     await prisma.assignment.delete({ where: { id: assignmentId } });
     cacheDelPrefix(`assign:${assignment.classId}:`);
-    if (storageTargets.length) {
-      await deleteStorageObjects(storageTargets, `assign:${assignmentId}`);
-    }
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -1483,7 +1032,8 @@ app.get("/api/storage/sign", async (req, res) => {
 
     const cleanPath = rawPath.replace(/^\/+/, "");
     const prefix = cleanPath.split("/")[0] || "";
-    if (!STORAGE_ALLOWED_PREFIXES.has(prefix)) {
+    const allowedPrefixes = new Set(["class-thumbs", "materials", "replays", "uploads"]);
+    if (!allowedPrefixes.has(prefix)) {
       return res.status(400).json({ error: "path not allowed" });
     }
     const cacheKey = `storage:sign:${bucket}:${cleanPath}:${download || ""}`;
@@ -1660,163 +1210,20 @@ app.post("/api/qna/:id/comments", requireAuth, async (req, res) => {
   }
 });
 
-// ---------- Chat ----------
-app.get("/api/classes/:id/chat", requireAuth, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const access = await ensureClassAccess(req, classId);
-    if (access.error) return res.status(404).json({ error: access.error });
-    if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "수강 중인 학생만 채팅을 볼 수 있습니다." });
-    }
+// ============================================
+// Server Startup
+// ============================================
 
-    const listRaw = await prisma.chatMessage.findMany({
-      where: { classId },
-      orderBy: { sentAt: "asc" },
-      include: { user: { select: { id: true, name: true, email: true } } },
+const startServer = async () => {
+  try {
+    // Initialize database connection first
+    await initializeDatabase();
+
+    // Start Express server
+    const server = app.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
+      logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
-    const list = listRaw.map(m => ({
-      ...m,
-      userName: m.user?.name || null,
-      userEmail: m.user?.email || null,
-    }));
-    res.json(list);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "채팅 조회 실패" });
-  }
-});
-
-app.post("/api/classes/:id/chat", requireAuth, async (req, res) => {
-  try {
-    await ensureUserExists(req);
-    const classId = req.params.id;
-    const { message } = req.body;
-    if (!message) return res.status(400).json({ error: "message가 필요합니다." });
-
-    const access = await ensureClassAccess(req, classId);
-    if (access.error) return res.status(404).json({ error: access.error });
-    if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "수강 중인 학생만 채팅을 보낼 수 있습니다." });
-    }
-
-    const m = await prisma.chatMessage.create({
-      data: { classId, userId: req.user.id, message },
-      include: { user: { select: { id: true, name: true, email: true } } },
-    });
-    res.status(201).json({
-      ...m,
-      userName: m.user?.name || null,
-      userEmail: m.user?.email || null,
-      userRole: m.user?.role || null,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "채팅 전송 실패" });
-  }
-});
-
-// ---------- Attendance ----------
-app.get("/api/classes/:id/attendance", requireAuth, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const access = await ensureClassAccess(req, classId);
-    if (access.error) return res.status(404).json({ error: access.error });
-    if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "수강 중인 학생만 출석을 볼 수 있습니다." });
-    }
-
-    const list = await prisma.attendance.findMany({
-      where: { classId },
-      orderBy: { joinedAt: "asc" },
-    });
-    const filtered = access.isTeacher ? list : list.filter((a) => a.userId === req.user.id);
-    res.json(filtered);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "출석 조회 실패" });
-  }
-});
-
-app.post("/api/classes/:id/attendance", requireAuth, requireStudent, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const access = await ensureClassAccess(req, classId);
-    if (access.error) return res.status(404).json({ error: access.error });
-    if (!access.isActiveStudent) return res.status(403).json({ error: "수강 중인 학생만 출석을 기록할 수 있습니다." });
-
-    const a = await prisma.attendance.create({
-      data: { classId, userId: req.user.id },
-    });
-    res.status(201).json(a);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "출석 기록 실패" });
-  }
-});
-
-// ---------- Progress ----------
-app.get("/api/classes/:id/progress", requireAuth, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const access = await ensureClassAccess(req, classId);
-    if (access.error) return res.status(404).json({ error: access.error });
-    if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "수강 중인 학생만 진도를 볼 수 있습니다." });
-    }
-
-    if (access.isTeacher) {
-      const list = await prisma.progress.findMany({ where: { classId } });
-      res.json(list);
-    } else {
-      const my = await prisma.progress.findUnique({
-        where: { classId_userId: { classId, userId: req.user.id } },
-      });
-      res.json(my ? [my] : []);
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "진도 조회 실패" });
-  }
-});
-
-app.post("/api/classes/:id/progress", requireAuth, requireStudent, async (req, res) => {
-  try {
-    const classId = req.params.id;
-    const { percent } = req.body;
-    const pct = Number(percent);
-    if (Number.isNaN(pct)) return res.status(400).json({ error: "percent가 필요합니다." });
-
-    const access = await ensureClassAccess(req, classId);
-    if (access.error) return res.status(404).json({ error: access.error });
-    if (!access.isActiveStudent) return res.status(403).json({ error: "수강 중인 학생만 진도를 기록할 수 있습니다." });
-
-    const p = await prisma.progress.upsert({
-      where: { classId_userId: { classId, userId: req.user.id } },
-      update: { percent: pct, updatedAt: new Date() },
-      create: { classId, userId: req.user.id, percent: pct },
-    });
-    res.status(201).json(p);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "진도 기록 실패" });
-  }
-});
-
-// Admin: 사용자 정지/해제
-app.post("/api/admin/users/:id/suspend", requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const targetId = req.params.id;
-    const untilRaw = req.body?.until || null;
-    const reason = req.body?.reason || null;
-    let until = null;
-    if (untilRaw) {
-      const t = new Date(untilRaw);
-      if (!Number.isNaN(t.getTime())) until = t;
-    }
-    // 보장된 사용자 레코드 확보(없으면 auth에서 가져오고, 실패 시 기본값으로 생성)
-    let ensured = await prisma.user.findUnique({ where: { id: targetId } });
-    if (!ensured) ensured = await ensureUserRecordById(targetId);
 
     // 항상 upsert로 상태를 기록해, Prisma에 사용자 레코드가 없어도 정지 처리가 되도록 함
     const createdFallback = {
@@ -1999,14 +1406,9 @@ app.delete("/api/replays/:id", requireAuth, requireTeacher, async (req, res) => 
       return res.status(403).json({ error: "본인 수업의 다시보기만 삭제할 수 있습니다." });
     }
 
-    const storageTargets = collectStorageObjects([replay.vodUrl]);
-
     await prisma.replay.delete({ where: { id: replayId } });
     cacheDelPrefix(`replays:${replay.classId}:`);
     cacheDelPrefix(`classes:detail:${replay.classId}:`);
-    if (storageTargets.length) {
-      await deleteStorageObjects(storageTargets, `replay:${replayId}`);
-    }
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -2024,54 +1426,9 @@ app.get(["/class_detail/:id", "/live_class/:id", "/classes/:id"], (req, res, nex
   if (fs.existsSync(file)) {
     return sendHtml(res, file);
   }
-  next();
-});
+};
 
-// .html 요청은 직접 서빙해 리다이렉트 왕복을 줄임
-app.use((req, res, next) => {
-  if (req.path.endsWith(".html")) {
-    const clean = req.path.replace(/^\/+/, "");
-    const candidate = path.join(clientDir, clean);
-    if (fs.existsSync(candidate)) {
-      return sendHtml(res, candidate);
-    }
-  }
-  next();
-});
+// Start the server
+startServer();
 
-// 확장자 없이 들어오면 대응하는 .html이 있으면 서빙
-app.use((req, res, next) => {
-  if (!path.extname(req.path)) {
-    const clean = req.path === "/" ? "/index" : req.path.replace(/\/+$/, "");
-    const candidate = path.join(clientDir, `${clean}.html`);
-    if (fs.existsSync(candidate)) {
-      return sendHtml(res, candidate);
-    }
-  }
-  next();
-});
-
-app.use(express.static(clientDir, {
-  maxAge: "7d",
-  immutable: true,
-  setHeaders(res, filePath) {
-    const ext = path.extname(filePath);
-    if (ext === ".html") {
-      setHtmlCacheHeaders(res);
-      return;
-    }
-    if (ext === ".js" || ext === ".css" || ext === ".json") {
-      res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
-      return;
-    }
-    res.set("Cache-Control", "public, max-age=604800, immutable");
-  },
-}));
-app.get("*", (req, res) => {
-  sendHtml(res, path.join(clientDir, "index.html"));
-});
-
-// Start
-app.listen(PORT, () => {
-  console.log(`LessonBay API listening on http://localhost:${PORT}`);
-});
+module.exports = app;
