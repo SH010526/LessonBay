@@ -25,7 +25,7 @@ function loadStudentDashboard() {
     let classes = getClasses();
     if (!classes.length) {
       try {
-        const refreshed = await apiGet("/api/classes", { silent: true });
+        const refreshed = await apiGet("/api/classes", { silent: true, cache: "no-store" });
         if (Array.isArray(refreshed)) {
           const normalized = refreshed.map(c => ({
             ...c,

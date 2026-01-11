@@ -98,7 +98,7 @@ function handleCreateClassPage() {
           monthlyPrice,
           thumbUrl: thumbUrlFinal,
         });
-        const refreshed = await apiGet("/api/classes").catch(() => []);
+        const refreshed = await apiGet("/api/classes", { cache: "no-store" }).catch(() => []);
         setClasses(refreshed || []);
         alert("수업 생성 완료!");
         navigateTo("teacher_dashboard.html");

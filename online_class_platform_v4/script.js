@@ -374,8 +374,10 @@ async function apiGet(path, opts = {}) {
   const tolerateTimeout = !!opts.tolerateTimeout;
   if (!silent) showLoading();
   try {
+    const fetchOptions = { headers: await apiHeaders() };
+    if (opts.cache) fetchOptions.cache = opts.cache;
     const res = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
-      headers: await apiHeaders(),
+      ...fetchOptions,
     }, timeoutMs);
     if (!res.ok) {
       if (res.status === 401) handleUnauthorized();
@@ -447,6 +449,8 @@ async function apiRequest(path, method = "GET", body = null) {
 
 const FALLBACK_THUMB =
   "https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=1400&q=60";
+const PLACEHOLDER_THUMB =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 const K = {
   USER: "lc_user",
@@ -1029,7 +1033,7 @@ async function maybeRestoreLegacyClasses(legacyClasses, user) {
 
   let remote = [];
   try {
-    remote = await apiGet("/api/classes", { silent: true });
+    remote = await apiGet("/api/classes", { silent: true, cache: "no-store" });
   } catch (_) {
     remote = [];
   }
@@ -1069,7 +1073,7 @@ async function maybeRestoreLegacyClasses(legacyClasses, user) {
   }
 
   try {
-    const refreshed = await apiGet("/api/classes", { silent: true });
+    const refreshed = await apiGet("/api/classes", { silent: true, cache: "no-store" });
     if (Array.isArray(refreshed)) {
       const normalized = (refreshed || []).map(c => ({
         ...c,
@@ -1119,14 +1123,15 @@ function isProdOrigin() {
 function initialThumbSrc(raw) {
   if (!raw) return FALLBACK_THUMB;
   if (isHttpLike(raw) || raw.startsWith("data:")) return raw;
-  return FALLBACK_THUMB;
+  return PLACEHOLDER_THUMB;
 }
 
 async function hydrateThumb(el, raw) {
   if (!el) return;
+  if (el.dataset.thumbHydrated === "1") return;
+  el.dataset.thumbHydrated = "1";
   if (!raw) { el.src = FALLBACK_THUMB; return; }
   if (isHttpLike(raw) || raw.startsWith("data:")) { el.src = raw; }
-  else { el.src = FALLBACK_THUMB; }
 
   const retryCnt = Number(el.getAttribute("data-thumb-retry") || "0");
   if (!el.dataset.thumbErrorBound) {
@@ -1170,9 +1175,32 @@ async function ensureUserReady(timeoutMs = 1200) {
   return getUser();
 }
 
+let __thumbObserver = null;
+function ensureThumbObserver() {
+  if (__thumbObserver || typeof IntersectionObserver === "undefined") return __thumbObserver;
+  __thumbObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const img = entry.target;
+      __thumbObserver.unobserve(img);
+      const raw = img.getAttribute("data-thumb") || "";
+      hydrateThumb(img, raw);
+    });
+  }, { rootMargin: "200px 0px" });
+  return __thumbObserver;
+}
+
 function hydrateThumbs(ctx = document) {
+  const obs = ensureThumbObserver();
   $$("img[data-thumb]", ctx).forEach((img) => {
+    if (img.dataset.thumbHydrated === "1") return;
     const raw = img.getAttribute("data-thumb") || "";
+    if (obs) {
+      if (img.dataset.thumbObserved === "1") return;
+      img.dataset.thumbObserved = "1";
+      obs.observe(img);
+      return;
+    }
     hydrateThumb(img, raw);
   });
 }
@@ -2066,7 +2094,7 @@ async function ensureSeedData() {
   // 원격 수업 목록 (느린 응답이면 타임아웃 후 백그라운드 재시도)
   const fetchClassesOnce = (attempt = 0) => {
     const timeoutMs = attempt === 0 ? 4000 : 8000;
-    return apiGet("/api/classes", { silent: true, timeout: timeoutMs, tolerateTimeout: true })
+    return apiGet("/api/classes", { silent: true, timeout: timeoutMs, tolerateTimeout: true, cache: "no-store" })
       .then((classes) => {
         if (!Array.isArray(classes)) return false;
         const normalized = (classes || []).map(c => ({

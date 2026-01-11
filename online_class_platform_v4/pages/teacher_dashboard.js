@@ -11,7 +11,7 @@ function loadTeacherDashboard() {
     let classes = getClasses();
     if (!classes.length) {
       try {
-        const refreshed = await apiGet("/api/classes", { silent: true });
+        const refreshed = await apiGet("/api/classes", { silent: true, cache: "no-store" });
         if (Array.isArray(refreshed)) {
           const normalized = refreshed.map(c => ({
             ...c,
@@ -76,7 +76,7 @@ function loadTeacherDashboard() {
         (async () => {
           try {
             await apiRequest(`/api/classes/${encodeURIComponent(id)}`, "DELETE");
-            const refreshed = await apiGet("/api/classes").catch(() => []);
+            const refreshed = await apiGet("/api/classes", { cache: "no-store" }).catch(() => []);
             setClasses(refreshed || []);
             alert("수업을 삭제했습니다.");
             loadTeacherDashboard(); // 리스트 갱신
