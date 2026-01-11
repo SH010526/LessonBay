@@ -1888,9 +1888,10 @@ async function ensureSeedData() {
   if (user) {
     const cachedEnroll = loadCachedEnrollments(user);
     if (cachedEnroll) {
-      hasCachedEnroll = true;
       setEnrollments(cachedEnroll);
-      markEnrollmentsSynced();
+      hasCachedEnroll = Array.isArray(cachedEnroll) && cachedEnroll.length > 0;
+      if (hasCachedEnroll) markEnrollmentsSynced();
+      else markEnrollmentsUnsynced();
     } else {
       setEnrollments({});
       markEnrollmentsUnsynced();
@@ -1947,7 +1948,8 @@ async function ensureSeedData() {
       const u = getUser();
       if (u) {
         const cachedEnroll = loadCachedEnrollments(u);
-        if (!cachedEnroll) {
+        const hasEnroll = Array.isArray(cachedEnroll) && cachedEnroll.length > 0;
+        if (!hasEnroll) {
           try {
             await fetchEnrollmentsForUser(u, 0, { force: true });
             rerenderVisible();

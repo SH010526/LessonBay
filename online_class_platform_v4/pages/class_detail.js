@@ -632,6 +632,8 @@ function ensureProtectedData() {
       });
       const latest = await apiGet("/api/me/enrollments");
       setEnrollments(latest || []);
+      cacheEnrollments(user, latest || []);
+      markEnrollmentsSynced();
       alert("수강 등록 완료!");
     } catch (err) {
       console.error(err);
