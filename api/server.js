@@ -841,6 +841,330 @@ app.delete("/api/classes/:id", requireAuth, async (req, res) => {
   }
 });
 
+
+// Enrollment
+function calcEndAt(planType, duration) {
+  const now = new Date();
+  const d = Number(duration) || 1;
+  const end = new Date(now);
+  if (planType === PlanType.monthly) {
+    end.setDate(end.getDate() + 30 * d);
+  } else {
+    end.setDate(end.getDate() + 7 * d);
+  }
+  return end;
+}
+
+app.post("/api/classes/:id/enroll", requireAuth, requireStudent, async (req, res) => {
+  try {
+    await ensureUserExists(req);
+    const classId = req.params.id;
+    const planType = req.body.planType === "monthly" ? PlanType.monthly : PlanType.weekly;
+    const duration = Number(req.body.duration) || 1;
+    const paidAmount = Number(req.body.paidAmount) || 0;
+    const endAt = calcEndAt(planType, duration);
+
+    const cls = await prisma.class.findUnique({ where: { id: classId } });
+    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
+
+    const enrollment = await prisma.enrollment.upsert({
+      where: { userId_classId: { userId: req.user.id, classId } },
+      update: { planType, duration, paidAmount, endAt, status: EnrollmentStatus.active },
+      create: {
+        userId: req.user.id,
+        classId,
+        planType,
+        duration,
+        paidAmount,
+        endAt,
+        status: EnrollmentStatus.active,
+      },
+    });
+    cacheDelPrefix("enroll:");
+    res.status(201).json(enrollment);
+  } catch (err) {
+    console.error("Enroll error:", err);
+    res.status(500).json({ error: "????? ????? ?????", detail: err?.message || String(err) });
+  }
+});
+
+app.get("/api/me/enrollments", requireAuth, async (req, res) => {
+  try {
+    const cacheKey = `enroll:${req.user.id}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      setCacheHeaders(res, 20, 60);
+      return res.json(cached);
+    }
+    const list = await prisma.enrollment.findMany({
+      where: { userId: req.user.id },
+      orderBy: { createdAt: "desc" },
+      include: { class: true },
+    });
+    cacheSet(cacheKey, list, 20 * 1000);
+    setCacheHeaders(res, 20, 60);
+    res.json(list);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "????? ?????? ?????? ?????" });
+  }
+});
+
+// Replays
+app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const cacheKey = `replays:${classId}:u:${req.user.id}:r:${req.user.role}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      setCacheHeaders(res, 60, 120);
+      return res.json(cached);
+    }
+    if (!replayRlsDisabled) {
+      await disableRlsIfOn();
+    }
+
+    const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
+    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
+
+    if (req.user.id !== cls.teacherId) {
+      const enroll = await prisma.enrollment.findUnique({
+        where: { userId_classId: { userId: req.user.id, classId } },
+      });
+      if (!enrollmentIsActive(enroll)) {
+        return res.status(403).json({ error: "????? ?????? ?????????????????????????????????????." });
+      }
+    }
+
+    const listRaw = await prisma.replay.findMany({
+      where: { classId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        classId: true,
+        sessionId: true,
+        title: true,
+        mime: true,
+        createdAt: true,
+      },
+    });
+    const list = listRaw.map((r) => ({
+      ...r,
+      hasVod: true,
+    }));
+    cacheSet(cacheKey, list, REPLAYS_CACHE_TTL_MS);
+    setCacheHeaders(res, 60, 120);
+    res.json(list);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "??????????? ?????? ?????" });
+  }
+});
+
+app.post("/api/classes/:id/replays", requireAuth, requireTeacher, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const { vodUrl, mime, title, sessionId } = req.body;
+    if (!vodUrl) return res.status(400).json({ error: "vodUrl??????????????" });
+
+    const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
+    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
+    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "?????? ?????????????????? ?????????????." });
+
+    const replay = await prisma.replay.create({
+      data: { classId, sessionId: sessionId || null, vodUrl, mime: mime || null, title: title || null },
+    });
+    cacheDelPrefix(`replays:${classId}:`);
+    cacheDelPrefix(`classes:detail:${classId}:`);
+    res.status(201).json({
+      ...replay,
+      vodUrl: undefined,
+      hasVod: true,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "??????????? ????? ?????" });
+  }
+});
+
+app.get("/api/replays/:id", requireAuth, async (req, res) => {
+  try {
+    const replayId = req.params.id;
+    const replay = await prisma.replay.findUnique({ where: { id: replayId } });
+    if (!replay) return res.status(404).json({ error: "???????????????????? ????????????." });
+
+    const cls = await prisma.class.findUnique({ where: { id: replay.classId }, select: { teacherId: true } });
+    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
+
+    const isTeacher = req.user?.role === "teacher" && req.user?.id === cls.teacherId;
+    if (!isTeacher) {
+      const enroll = await prisma.enrollment.findUnique({
+        where: { userId_classId: { userId: req.user.id, classId: replay.classId } },
+      });
+      if (!enrollmentIsActive(enroll)) {
+        return res.status(403).json({ error: "????? ?????? ?????????????????????????????????????." });
+      }
+    }
+
+    res.json({ ...replay, hasVod: !!replay.vodUrl });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "??????????? ?????? ?????" });
+  }
+});
+
+// ---------- Common helper for class access ----------
+async function ensureClassAccess(req, classId) {
+  const cls = await prisma.class.findUnique({ where: { id: classId } });
+  if (!cls) return { error: "????????????? ????????????.", cls: null, isTeacher: false, isActiveStudent: false };
+  const isTeacher = req.user?.role === "teacher" && req.user?.id === cls.teacherId;
+  let isActiveStudent = false;
+  if (!isTeacher) {
+    const enroll = await prisma.enrollment.findUnique({
+      where: { userId_classId: { userId: req.user.id, classId } },
+    });
+    isActiveStudent = enrollmentIsActive(enroll);
+  }
+  return { cls, isTeacher, isActiveStudent, error: null };
+}
+
+// ---------- Materials ----------
+app.get("/api/classes/:id/materials", requireAuth, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const access = await ensureClassAccess(req, classId);
+    if (access.error) return res.status(404).json({ error: access.error });
+    if (!access.isTeacher && !access.isActiveStudent) {
+      return res.status(403).json({ error: "????? ?????? ???????????????????????????????." });
+    }
+
+    const list = await prisma.material.findMany({
+      where: { classId },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(list);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "????? ?????? ?????" });
+  }
+});
+
+app.post("/api/classes/:id/materials", requireAuth, requireTeacher, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const { title, fileUrl, mime } = req.body;
+    if (!title || !fileUrl) return res.status(400).json({ error: "title???fileUrl??????????????" });
+
+    const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
+    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
+    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "?????? ?????????? ????????????????????." });
+
+    const m = await prisma.material.create({
+      data: {
+        classId,
+        title,
+        fileUrl,
+        mime: mime || null,
+        uploaderId: req.user.id,
+      },
+    });
+    res.status(201).json(m);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "????? ????????????" });
+  }
+});
+
+// ---------- Assignments ----------
+app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const cacheKey = `assign:${classId}:u:${req.user.id}:r:${req.user.role}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      setCacheHeaders(res, 30, 60);
+      return res.json(cached);
+    }
+    const access = await ensureClassAccess(req, classId);
+    if (access.error) return res.status(404).json({ error: access.error });
+    if (!access.isTeacher && !access.isActiveStudent) {
+      return res.status(403).json({ error: "????? ?????? ????????????????????????????????." });
+    }
+
+    const includeSubs = access.isTeacher
+      ? {
+          include: {
+            submissions: {
+              select: {
+                id: true,
+                assignmentId: true,
+                studentId: true,
+                content: true,
+                score: true,
+                feedback: true,
+                submittedAt: true,
+                gradedAt: true,
+                fileUrl: true,
+                student: { select: { id: true, name: true, email: true } },
+              },
+            },
+          },
+        }
+      : { include: { submissions: { where: { studentId: req.user.id } } } };
+
+    const listRaw = await prisma.assignment.findMany({
+      where: { classId },
+      orderBy: { createdAt: "desc" },
+      ...includeSubs,
+    });
+
+    const list = listRaw.map((a) => ({
+      ...a,
+      submissions: (a.submissions || []).map((s) => ({
+        ...s,
+        studentName: s.student?.name || null,
+        studentEmail: s.student?.email || null,
+        hasFile: !!s.fileUrl,
+        fileName: inferFileNameFromUrl(s.fileUrl || ""),
+        fileUrl: access.isTeacher ? undefined : s.fileUrl,
+        student: undefined,
+      })),
+    }));
+    cacheSet(cacheKey, list, ASSIGNMENTS_CACHE_TTL_MS);
+    setCacheHeaders(res, 30, 60);
+    res.json(list);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "?????? ?????? ?????" });
+  }
+});
+
+app.post("/api/classes/:id/assignments", requireAuth, requireTeacher, async (req, res) => {
+  try {
+    const classId = req.params.id;
+    const { title, description, dueAt } = req.body;
+    if (!title) return res.status(400).json({ error: "title??????????????" });
+
+    const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
+    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
+    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "?????? ?????????? ????? ?????????????." });
+
+    const a = await prisma.assignment.create({
+      data: {
+        classId,
+        title,
+        description: description || null,
+        dueAt: dueAt ? new Date(dueAt) : null,
+      },
+    });
+    cacheDelPrefix(`assign:${classId}:`);
+    res.status(201).json(a);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "?????? ????? ?????" });
+  }
+});
+
 // Health Check Endpoint (lightweight)
 app.get("/health", (_req, res) => {
   res.status(200).json({
