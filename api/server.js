@@ -650,8 +650,7 @@ app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
   }
 });
 
-// Logging middleware
-app.use(morgan('combined', { stream: logger.stream }));
+// Logging middleware (access log handled above)
 
 // Account delete (Supabase admin + DB 정리)
 app.post("/api/account/delete", requireAuth, async (req, res) => {
@@ -842,15 +841,10 @@ app.delete("/api/classes/:id", requireAuth, async (req, res) => {
   }
 });
 
-// Response caching middleware - after body parsing
-app.use(cacheMiddleware);
-
-// ============================================
 // Health Check Endpoint (lightweight)
-// ============================================
-app.get('/health', (req, res) => {
+app.get("/health", (_req, res) => {
   res.status(200).json({
-    status: 'OK',
+    status: "OK",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
@@ -1210,26 +1204,19 @@ app.post("/api/qna/:id/comments", requireAuth, async (req, res) => {
   }
 });
 
-// ============================================
-// Server Startup
-// ============================================
-
-const startServer = async () => {
+// Admin: suspend user
+app.post("/api/admin/users/:id/suspend", requireAuth, requireAdmin, async (req, res) => {
   try {
-    // Initialize database connection first
-    await initializeDatabase();
+    const targetId = req.params.id;
+    const minutes = Number(req.body?.minutes || req.query?.minutes || 0);
+    const until = minutes > 0 ? new Date(Date.now() + minutes * 60 * 1000) : null;
+    let ensured = await prisma.user.findUnique({ where: { id: targetId } });
+    if (!ensured) ensured = await ensureUserRecordById(targetId);
 
-    // Start Express server
-    const server = app.listen(PORT, () => {
-      logger.info(`Server running on port ${PORT}`);
-      logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    });
-
-    // 항상 upsert로 상태를 기록해, Prisma에 사용자 레코드가 없어도 정지 처리가 되도록 함
     const createdFallback = {
       id: targetId,
       email: `${targetId}@lessonbay.local`,
-      name: "사용자",
+      name: "user",
       role: "student",
       status: "active",
       suspendedUntil: null,
@@ -1242,9 +1229,9 @@ const startServer = async () => {
     res.json({ ok: true, status: "suspended", suspendedUntil: until });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "정지 처리 실패" });
+    res.status(500).json({ error: "suspend failed" });
   }
-};
+});
 
 app.post("/api/admin/users/:id/unsuspend", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -1429,6 +1416,9 @@ app.get(["/class_detail/:id", "/live_class/:id", "/classes/:id"], (req, res, nex
 });
 
 // Start the server
-startServer();
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+});
 
 module.exports = app;
