@@ -1854,12 +1854,12 @@ async function ensureSeedData() {
   const detailOnly = !!document.getElementById("detailRoot") && !document.getElementById("classGrid") && !document.getElementById("homePopular");
 
   const rerenderVisible = () => {
-    if (typeof loadHomePopular === "function" && $("#homePopular")) loadHomePopular();
-    if (typeof loadClassesPage === "function" && $("#classGrid")) loadClassesPage();
-    if (typeof loadClassDetailPage === "function" && $("#detailRoot")) loadClassDetailPage();
-    if (typeof handleCreateClassPage === "function" && $("#createClassForm")) handleCreateClassPage();
-    if (typeof loadTeacherDashboard === "function" && $("#teacherDash")) loadTeacherDashboard();
-    if (typeof loadStudentDashboard === "function" && $("#studentDash")) loadStudentDashboard();
+    if (typeof loadHomePopular === "function" && $("#homePopular")) loadHomePopular(); // 홈 인기 수업
+    if (typeof loadClassesPage === "function" && $("#classGrid")) loadClassesPage(); // 수업 목록
+    if (typeof loadClassDetailPage === "function" && $("#detailRoot")) loadClassDetailPage(); // 수업 상세
+    if (typeof handleCreateClassPage === "function" && $("#createClassForm")) handleCreateClassPage(); // 수업 생성
+    if (typeof loadTeacherDashboard === "function" && $("#teacherDash")) loadTeacherDashboard(); // 선생님 대시보드
+    if (typeof loadStudentDashboard === "function" && $("#studentDash")) loadStudentDashboard(); // 학생 대시보드
   };
 
   const cached = loadCachedClasses();
@@ -1902,13 +1902,13 @@ async function ensureSeedData() {
   updateNav();
 
   // 원격 수업 목록 (느린 응답이면 타임아웃 후 백그라운드 재시도)
-  const fetchClassesRemote = (attempt = 0) => {
-    const timeoutMs = attempt === 0 ? 4000 : 8000;
+  const fetchClassesRemote = (attempt = 0) => { 
+    const timeoutMs = attempt === 0 ? 4000 : 8000;  
     apiGet("/api/classes", { silent: true, timeout: timeoutMs, tolerateTimeout: true })
       .then((classes) => {
         if (!Array.isArray(classes) || !classes.length) {
           if (attempt < 2) {
-            setTimeout(() => fetchClassesRemote(attempt + 1), 4000 * (attempt + 1));
+            setTimeout(() => fetchClassesRemote(attempt + 1), 4000 * (attempt + 1)); 
           }
           return;
         }
@@ -2195,30 +2195,30 @@ function init() {
     scheduleIdleTask(() => {
       prefetchCorePages();
       bindNavPrefetch();
-    }, 1500);
+    }, 10); 
     const homePopular = $("#homePopular");
     if (typeof loadHomePopular === "function" && homePopular && homePopular.dataset.hydrated !== "1") {
       scheduleIdleTask(() => {
         if (homePopular.dataset.hydrated !== "1") loadHomePopular();
-      }, 1200);
+      }, 10);
     }
     const classGrid = $("#classGrid");
     if (typeof loadClassesPage === "function" && classGrid && classGrid.dataset.hydrated !== "1") {
       scheduleIdleTask(() => {
         if (classGrid.dataset.hydrated !== "1") loadClassesPage();
-      }, 1200);
+      }, 10);
     }
     const teacherDash = $("#teacherDash");
     if (typeof loadTeacherDashboard === "function" && teacherDash && teacherDash.dataset.hydrated !== "1") {
       scheduleIdleTask(() => {
         if (teacherDash.dataset.hydrated !== "1") loadTeacherDashboard();
-      }, 1200);
+      }, 10);
     }
     const studentDash = $("#studentDash");
     if (typeof loadStudentDashboard === "function" && studentDash && studentDash.dataset.hydrated !== "1") {
       scheduleIdleTask(() => {
         if (studentDash.dataset.hydrated !== "1") loadStudentDashboard();
-      }, 1200);
+      }, 10);
     }
 
     if (getPath() === "logout.html") doLogout(true);
