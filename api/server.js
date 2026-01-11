@@ -121,6 +121,7 @@ const CLASS_LIST_CACHE_TTL_MS = 5 * 60 * 1000;
 const CLASS_DETAIL_CACHE_TTL_MS = 2 * 60 * 1000;
 const REPLAYS_CACHE_TTL_MS = 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 60 * 1000;
+const AUTH_CACHE_TTL_MS = 60 * 1000;
 const STORAGE_SIGN_CACHE_TTL_MS = 20 * 60 * 1000;
 const CLASS_SUMMARY_SELECT = {
   id: true,
@@ -178,6 +179,21 @@ function cacheDelPrefix(prefix) {
   for (const key of responseCache.keys()) {
     if (key.startsWith(prefix)) responseCache.delete(key);
   }
+}
+
+const authCache = new Map(); // token -> { user, expiresAt }
+function authCacheGet(token) {
+  const hit = authCache.get(token);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    authCache.delete(token);
+    return null;
+  }
+  return hit.user || null;
+}
+function authCacheSet(token, user) {
+  if (!token || !user) return;
+  authCache.set(token, { user, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
 }
 
 function setCacheHeaders(res, maxAgeSec = 30, swrSec = 120) {
@@ -297,6 +313,18 @@ async function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: "인증 토큰이 없습니다." });
 
   try {
+    const cachedUser = authCacheGet(token);
+    if (cachedUser) {
+      req.user = { ...cachedUser };
+      const ensured = await ensureUserExists(req);
+      if (ensured) {
+        req.user.role = ensured.role;
+        const suspended = ensured.status === "suspended" || (ensured.suspendedUntil && new Date(ensured.suspendedUntil) > new Date());
+        if (suspended) return res.status(403).json({ error: "본인 수업의 다시보기만 삭제할 수 있습니다." });
+      }
+      return next();
+    }
+
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data?.user) return res.status(401).json({ error: "토큰이 유효하지 않습니다." });
 
@@ -307,6 +335,7 @@ async function requireAuth(req, res, next) {
       name: u.user_metadata?.name || u.email?.split("@")[0] || "user",
       role: u.user_metadata?.role === "teacher" ? "teacher" : u.user_metadata?.role === "admin" ? "admin" : "student",
     };
+    authCacheSet(token, req.user);
 
     // Prisma User 보장 + 최신 역할/정지 상태 반영
     const ensured = await ensureUserExists(req);
