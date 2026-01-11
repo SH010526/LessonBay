@@ -14,6 +14,8 @@ const nodemailer = require("nodemailer");
 const app = express();
 const prisma = new PrismaClient();
 const CDN_BASE_URL = String(process.env.CDN_BASE_URL || "").trim().replace(/\/+$/, "");
+const STORAGE_BUCKET = String(process.env.SUPABASE_STORAGE_BUCKET || "LessonBay").trim();
+const STORAGE_ALLOWED_PREFIXES = new Set(["class-thumbs", "materials", "replays", "uploads"]);
 
 // Warm up DB connection to reduce first-request latency.
 prisma.$connect().catch((err) => {
@@ -183,6 +185,70 @@ function cacheDel(key) {
 function cacheDelPrefix(prefix) {
   for (const key of responseCache.keys()) {
     if (key.startsWith(prefix)) responseCache.delete(key);
+  }
+}
+
+function parseSupabaseStorageRef(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.startsWith("data:")) return null;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      if (!u.hostname.includes("supabase.co")) return null;
+      const m = u.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
+      if (!m) return null;
+      let path = m[2];
+      try { path = decodeURIComponent(path); } catch (_) {}
+      return { bucket: m[1], path };
+    } catch (_) {
+      return null;
+    }
+  }
+  const clean = raw.replace(/^\/+/, "");
+  if (!clean) return null;
+  const parts = clean.split("/");
+  if (parts.length >= 2) {
+    if (STORAGE_BUCKET && parts[0] === STORAGE_BUCKET) {
+      return { bucket: parts[0], path: parts.slice(1).join("/") };
+    }
+    if (STORAGE_ALLOWED_PREFIXES.has(parts[0])) {
+      return { bucket: STORAGE_BUCKET, path: clean };
+    }
+    if (STORAGE_ALLOWED_PREFIXES.has(parts[1])) {
+      return { bucket: parts[0], path: parts.slice(1).join("/") };
+    }
+  }
+  return { bucket: STORAGE_BUCKET, path: clean };
+}
+
+function chunkArray(list, size) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) {
+    out.push(list.slice(i, i + size));
+  }
+  return out;
+}
+
+async function deleteStorageObjects(values) {
+  if (!Array.isArray(values) || !values.length) return;
+  const byBucket = new Map();
+  values.forEach((value) => {
+    const parsed = parseSupabaseStorageRef(value);
+    if (!parsed?.bucket || !parsed?.path) return;
+    const bucket = String(parsed.bucket || STORAGE_BUCKET).trim();
+    const path = String(parsed.path || "").replace(/^\/+/, "");
+    if (!bucket || !path) return;
+    if (!byBucket.has(bucket)) byBucket.set(bucket, new Set());
+    byBucket.get(bucket).add(path);
+  });
+  for (const [bucket, pathsSet] of byBucket) {
+    const paths = Array.from(pathsSet);
+    if (!paths.length) continue;
+    for (const chunk of chunkArray(paths, 100)) {
+      const { error } = await supabase.storage.from(bucket).remove(chunk);
+      if (error) console.error("storage remove failed:", bucket, error);
+    }
   }
 }
 
