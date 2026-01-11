@@ -1406,6 +1406,10 @@ app.delete("/api/replays/:id", requireAuth, requireTeacher, async (req, res) => 
 // Static frontend (online_class_platform_v4)
 const clientDir = path.join(__dirname, "..", "online_class_platform_v4");
 
+// Serve root and static assets
+app.get("/", (_req, res) => sendHtml(res, path.join(clientDir, "index.html")));
+app.use(express.static(clientDir));
+
 // Slug-style detail URLs (support /class_detail/:id, /live_class/:id, /classes/:id)
 app.get(["/class_detail/:id", "/live_class/:id", "/classes/:id"], (req, res, next) => {
   const base = (req.path.split("/")[1] || "").toLowerCase();
