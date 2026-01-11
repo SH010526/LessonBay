@@ -2096,7 +2096,7 @@ async function ensureSeedData() {
 
   // 초기 fetch는 병렬 처리 (로그인/캐시 상태에 따라 조건부 실행)
   const initialFetches = [];
-  if (!detailOnly && !hasCachedClasses) initialFetches.push(fetchClassesRemote(0));
+  if (!detailOnly) initialFetches.push(fetchClassesRemote(0));
   if (user && !hasCachedEnroll) {
     initialFetches.push(fetchEnrollmentsForUser(user, 0, { force: true, timeoutMs: 5000 }));
   }
