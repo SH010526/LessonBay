@@ -143,6 +143,18 @@ const CLASS_SUMMARY_SELECT = {
   teacher: { select: { id: true, name: true } },
 };
 
+const CLASS_LIST_SELECT = {
+  id: true,
+  title: true,
+  category: true,
+  weeklyPrice: true,
+  monthlyPrice: true,
+  thumbUrl: true,
+  teacherId: true,
+  createdAt: true,
+  teacher: { select: { id: true, name: true } },
+};
+
 function buildClassDetailSelect(includeReplays) {
   if (!includeReplays) {
     return { ...CLASS_SUMMARY_SELECT, updatedAt: true };
@@ -843,24 +855,23 @@ app.get("/api/classes", async (req, res) => {
     const cacheKey = `classes:list:${limit || "all"}`;
     const cached = cacheGet(cacheKey);
 
-    // Set a header that forces revalidation, preventing stale browser cache.
-    // 'no-cache' instructs the browser to check with the server before using a cached version.
-    res.set("Cache-Control", "private, no-cache");
+    // Set aggressive no-caching headers to prevent stale data issues.
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
 
     if (cached) {
-      // Fast response from in-memory server-side cache
       return res.json(cached);
     }
 
     const list = await prisma.class.findMany({
       orderBy: { createdAt: "desc" },
       ...(limit ? { take: limit } : {}),
-      select: CLASS_SUMMARY_SELECT,
+      select: CLASS_LIST_SELECT, // Use the new, lighter select object
     });
 
     cacheSet(cacheKey, list, CLASS_LIST_CACHE_TTL_MS);
     res.json(list);
-  } catch (err) {
+  } catch (err)
+  {
     console.error(err);
     res.status(500).json({ error: "수업 목록 조회 실패" });
   }
