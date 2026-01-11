@@ -1173,6 +1173,8 @@ app.post("/api/classes/:id/materials", requireAuth, requireTeacher, async (req, 
 });
 
 // ---------- Assignments ----------
+// Refactored: Returns a list of assignments with submission counts for teachers,
+// or with the student's own submission for students.
 app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
   try {
     const classId = req.params.id;
@@ -1182,57 +1184,126 @@ app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
       setCacheHeaders(res, 30, 60);
       return res.json(cached);
     }
+
     const access = await ensureClassAccess(req, classId);
     if (access.error) return res.status(404).json({ error: access.error });
     if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "????? ?????? ????????????????????????????????." });
+      return res.status(403).json({ error: "수강 중인 학생/선생님만 접근 가능합니다." });
     }
 
-    const includeSubs = access.isTeacher
-      ? {
-          include: {
-            submissions: {
-              select: {
-                id: true,
-                assignmentId: true,
-                studentId: true,
-                content: true,
-                score: true,
-                feedback: true,
-                submittedAt: true,
-                gradedAt: true,
-                fileUrl: true,
-                student: { select: { id: true, name: true, email: true } },
-              },
-            },
+    let includeClause = {};
+    if (access.isTeacher) {
+      // Teachers get a count of submissions
+      includeClause = {
+        include: {
+          _count: {
+            select: { submissions: true },
           },
-        }
-      : { include: { submissions: { where: { studentId: req.user.id } } } };
+        },
+      };
+    } else {
+      // Students get their own submission for each assignment
+      includeClause = {
+        include: {
+          submissions: {
+            where: { studentId: req.user.id },
+          },
+        },
+      };
+    }
 
-    const listRaw = await prisma.assignment.findMany({
+    const assignments = await prisma.assignment.findMany({
       where: { classId },
       orderBy: { createdAt: "desc" },
-      ...includeSubs,
+      ...includeClause,
     });
 
-    const list = listRaw.map((a) => ({
-      ...a,
-      submissions: (a.submissions || []).map((s) => ({
-        ...s,
-        studentName: s.student?.name || null,
-        studentEmail: s.student?.email || null,
-        hasFile: !!s.fileUrl,
-        fileName: inferFileNameFromUrl(s.fileUrl || ""),
-        fileUrl: access.isTeacher ? undefined : s.fileUrl,
-        student: undefined,
-      })),
-    }));
+    // Process the list to a consistent format
+    const list = assignments.map((a) => {
+      const submissionCount = a._count?.submissions ?? 0;
+      const mySubmission = a.submissions?.[0] || null;
+      return {
+        ...a,
+        // For students, submissions will contain their single submission. For teachers, it's an empty array.
+        submissions: mySubmission ? [mySubmission] : [],
+        submissionCount: submissionCount, // Useful for teachers
+        _count: undefined, // clean up
+      };
+    });
+
     cacheSet(cacheKey, list, ASSIGNMENTS_CACHE_TTL_MS);
     setCacheHeaders(res, 30, 60);
     res.json(list);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "?????? ?????? ?????" });
+    res.status(500).json({ error: "과제 목록 조회 실패" });
+  }
+});
+
+// New endpoint for fetching submissions for a single assignment (for teachers, paginated)
+app.get("/api/assignments/:id/submissions", requireAuth, requireTeacher, async (req, res) => {
+  try {
+    const assignmentId = req.params.id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id: assignmentId },
+      select: { class: { select: { teacherId: true } } },
+    });
+
+    if (!assignment) {
+      return res.status(404).json({ error: "과제를 찾을 수 없습니다." });
+    }
+    if (assignment.class.teacherId !== req.user.id) {
+      return res.status(403).json({ error: "본인 수업의 과제만 조회할 수 있습니다." });
+    }
+
+    const [submissions, total] = await prisma.$transaction([
+      prisma.assignmentSubmission.findMany({
+        where: { assignmentId },
+        select: {
+          id: true,
+          assignmentId: true,
+          studentId: true,
+          content: true,
+          score: true,
+          feedback: true,
+          submittedAt: true,
+          gradedAt: true,
+          fileUrl: true,
+          student: { select: { id: true, name: true, email: true } },
+        },
+        orderBy: { submittedAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.assignmentSubmission.count({ where: { assignmentId } })
+    ]);
+
+    const list = submissions.map((s) => ({
+      ...s,
+      studentName: s.student?.name || null,
+      studentEmail: s.student?.email || null,
+      hasFile: !!s.fileUrl,
+      fileName: inferFileNameFromUrl(s.fileUrl || ""),
+      fileUrl: undefined, // Do not expose fileUrl directly in the list
+      student: undefined,
+    }));
+
+    res.json({
+      data: list,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "제출물 조회 실패" });
   }
 });
 
@@ -1523,6 +1594,7 @@ app.post("/api/classes/:id/reviews", requireAuth, requireStudent, async (req, re
 });
 
 // ---------- Q&A ----------
+// Refactored: Returns a list of Q&A posts with a count of replies.
 app.get("/api/classes/:id/qna", requireAuth, async (req, res) => {
   try {
     const classId = req.params.id;
@@ -1532,30 +1604,27 @@ app.get("/api/classes/:id/qna", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "수강 중인 학생만 Q&A를 볼 수 있습니다." });
     }
 
-    const listRaw = await prisma.qna.findMany({
+    const qnaPosts = await prisma.qna.findMany({
       where: { classId },
       orderBy: { createdAt: "desc" },
       include: {
         user: { select: { id: true, name: true, email: true, role: true } },
-        comments: {
-          orderBy: { createdAt: "asc" },
-          include: { user: { select: { id: true, name: true, email: true, role: true } } },
+        _count: {
+          select: { comments: true },
         },
       },
     });
-    const list = listRaw.map(q => ({
+
+    const list = qnaPosts.map(q => ({
       ...q,
       userName: q.user?.name || null,
       userEmail: q.user?.email || null,
       userRole: q.user?.role || null,
-      replies: (q.comments || []).map(c => ({
-        ...c,
-        userName: c.user?.name || null,
-        userEmail: c.user?.email || null,
-        userRole: c.user?.role || null,
-      })),
-      comments: undefined, // replies로 별칭
+      user: undefined, // clean up
+      repliesCount: q._count?.comments ?? 0,
+      _count: undefined, // clean up
     }));
+
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -1590,6 +1659,46 @@ app.post("/api/classes/:id/qna", requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Q&A 저장 실패" });
+  }
+});
+
+// New endpoint for fetching comments for a single Q&A post
+app.get("/api/qna/:id/comments", requireAuth, async (req, res) => {
+  try {
+    const qnaId = req.params.id;
+    const qnaPost = await prisma.qna.findUnique({
+      where: { id: qnaId },
+      select: { classId: true },
+    });
+
+    if (!qnaPost) {
+      return res.status(404).json({ error: "Q&A 게시글을 찾을 수 없습니다." });
+    }
+
+    const access = await ensureClassAccess(req, qnaPost.classId);
+    if (access.error) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
+    if (!access.isTeacher && !access.isActiveStudent) {
+      return res.status(403).json({ error: "수강생 또는 선생님만 댓글을 볼 수 있습니다." });
+    }
+
+    const commentsRaw = await prisma.qnaComment.findMany({
+      where: { qnaId },
+      orderBy: { createdAt: "asc" },
+      include: { user: { select: { id: true, name: true, email: true, role: true } } },
+    });
+
+    const comments = commentsRaw.map(c => ({
+      ...c,
+      userName: c.user?.name || null,
+      userEmail: c.user?.email || null,
+      userRole: c.user?.role || null,
+      user: undefined, // clean up
+    }));
+
+    res.json(comments);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "댓글 조회 실패" });
   }
 });
 
