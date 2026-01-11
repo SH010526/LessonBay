@@ -326,19 +326,26 @@ async function loadLivePage() {
 
   async function disconnectRoom() {
     try {
+      if (screenPub?.track && room?.localParticipant?.unpublishTrack) {
+        try { await room.localParticipant.unpublishTrack(screenPub.track, true); } catch (_) {}
+      }
+      if (localCamTrack?.stop) localCamTrack.stop();
+      if (localMicTrack?.stop) localMicTrack.stop();
+      if (screenPub?.track?.stop) screenPub.track.stop();
       if (room) room.disconnect();
     } catch (_) {}
     room = null;
     localCamTrack = null;
     localMicTrack = null;
-    if (screenPub) {
-      try { room?.localParticipant?.unpublishTrack(screenPub.track, true); } catch (_) {}
-      screenPub = null;
-    }
+    screenPub = null;
     remoteList.splice(0, remoteList.length);
     renderRemotePage();
     setConnectedUI(false);
   }
+
+  window.__pageCleanup = async () => {
+    await disconnectRoom();
+  };
 
   window.addEventListener("beforeunload", disconnectRoom);
 
@@ -575,6 +582,7 @@ async function loadLivePage() {
   const chatInput = $("#chatInput");
   const chatSend = $("#chatSend");
   const displayName = (m) => escapeHtml(displayUserName(m));
+  const displayRole = (m) => escapeHtml(displayUserRole(m));
 
   async function renderChat() {
     if (!chatLog) return;
@@ -590,7 +598,7 @@ async function loadLivePage() {
     const list = (getChat()[classId] || []);
     chatLog.innerHTML = list.map(m => `
       <div class="msg ${m.userId === user.id ? "me" : ""}">
-        <div class="mmeta">${displayName(m)} · ${new Date(m.sentAt || m.at).toLocaleTimeString("ko-KR")}</div>
+        <div class="mmeta">${displayName(m)} | ${displayRole(m)} | ${new Date(m.sentAt || m.at).toLocaleTimeString("ko-KR")}</div>
         <div class="mtext">${escapeHtml(m.message || m.text || "")}</div>
       </div>
     `).join("");
@@ -619,8 +627,9 @@ async function loadLivePage() {
 
   renderChat();
 
-  $("#btnLeave")?.addEventListener("click", () => {
-    disconnectRoom();
+  $("#btnLeave")?.addEventListener("click", async () => {
+    await disconnectRoom();
+    window.__pageCleanup = null;
     goClassDetail(classId);
   });
 

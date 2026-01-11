@@ -1602,6 +1602,15 @@ async function softNavigate(url, opts = {}) {
     if (doc?.title) document.title = doc.title;
     const body = doc.body;
     if (!body) return;
+    try {
+      const cleanup = window.__pageCleanup;
+      if (typeof cleanup === "function") {
+        window.__pageCleanup = null;
+        await cleanup();
+      }
+    } catch (e) {
+      console.error("page cleanup failed", e);
+    }
     document.body.innerHTML = body.innerHTML;
     if (replace) history.replaceState({}, "", u.toString());
     else history.pushState({}, "", u.toString());
