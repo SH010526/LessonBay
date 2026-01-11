@@ -15,6 +15,11 @@ const app = express();
 const prisma = new PrismaClient();
 const CDN_BASE_URL = String(process.env.CDN_BASE_URL || "").trim().replace(/\/+$/, "");
 
+// Warm up DB connection to reduce first-request latency.
+prisma.$connect().catch((err) => {
+  console.error("Prisma connect failed:", err);
+});
+
 // 로그 파일 설정
 const logDir = path.join(__dirname, "..", "logs");
 if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
@@ -114,6 +119,8 @@ const kickedMap = new Map(); // classId -> Map<userId, expiresAt>
 const responseCache = new Map(); // key -> { value, expiresAt }
 const CLASS_LIST_CACHE_TTL_MS = 5 * 60 * 1000;
 const CLASS_DETAIL_CACHE_TTL_MS = 2 * 60 * 1000;
+const REPLAYS_CACHE_TTL_MS = 60 * 1000;
+const ASSIGNMENTS_CACHE_TTL_MS = 60 * 1000;
 const STORAGE_SIGN_CACHE_TTL_MS = 20 * 60 * 1000;
 const CLASS_SUMMARY_SELECT = {
   id: true,
@@ -869,7 +876,7 @@ app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
     const cacheKey = `replays:${classId}:u:${req.user.id}:r:${req.user.role}`;
     const cached = cacheGet(cacheKey);
     if (cached) {
-      setCacheHeaders(res, 15, 60);
+      setCacheHeaders(res, 60, 120);
       return res.json(cached);
     }
     // RLS가 켜져 있으면 삽입이 막히므로 비활성화 시도
@@ -905,8 +912,8 @@ app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
       ...r,
       hasVod: true, // vodUrl 컬럼이 필수라 재생 가능 여부를 빠르게 알 수 있음
     }));
-    cacheSet(cacheKey, list, 15 * 1000);
-    setCacheHeaders(res, 15, 60);
+    cacheSet(cacheKey, list, REPLAYS_CACHE_TTL_MS);
+    setCacheHeaders(res, 60, 120);
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -930,6 +937,8 @@ app.post("/api/classes/:id/replays", requireAuth, requireTeacher, async (req, re
     const replay = await prisma.replay.create({
       data: { classId, sessionId: sessionId || null, vodUrl, mime: mime || null, title: title || null },
     });
+    cacheDelPrefix(`replays:${classId}:`);
+    cacheDelPrefix(`classes:detail:${classId}:`);
     res.status(201).json({
       ...replay,
       vodUrl: undefined, // 목록 응답에서는 대용량 데이터 제외
@@ -1040,7 +1049,7 @@ app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
     const cacheKey = `assign:${classId}:u:${req.user.id}:r:${req.user.role}`;
     const cached = cacheGet(cacheKey);
     if (cached) {
-      setCacheHeaders(res, 10, 40);
+      setCacheHeaders(res, 60, 120);
       return res.json(cached);
     }
     const access = await ensureClassAccess(req, classId);
@@ -1078,8 +1087,8 @@ app.get("/api/classes/:id/assignments", requireAuth, async (req, res) => {
         })),
       };
     });
-    cacheSet(cacheKey, list, 10 * 1000);
-    setCacheHeaders(res, 10, 40);
+    cacheSet(cacheKey, list, ASSIGNMENTS_CACHE_TTL_MS);
+    setCacheHeaders(res, 60, 120);
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -1105,6 +1114,7 @@ app.post("/api/classes/:id/assignments", requireAuth, requireTeacher, async (req
         dueAt: dueAt ? new Date(dueAt) : null,
       },
     });
+    cacheDelPrefix(`assign:${classId}:`);
     res.status(201).json(a);
   } catch (err) {
     console.error(err);
@@ -1134,6 +1144,7 @@ app.put("/api/assignments/:id", requireAuth, requireTeacher, async (req, res) =>
         dueAt: dueAt ? new Date(dueAt) : null,
       },
     });
+    cacheDelPrefix(`assign:${assignment.classId}:`);
     res.json(updated);
   } catch (err) {
     console.error(err);
@@ -1154,6 +1165,7 @@ app.delete("/api/assignments/:id", requireAuth, requireTeacher, async (req, res)
 
     await prisma.assignmentSubmission.deleteMany({ where: { assignmentId } });
     await prisma.assignment.delete({ where: { id: assignmentId } });
+    cacheDelPrefix(`assign:${assignment.classId}:`);
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -1201,6 +1213,7 @@ app.post("/api/assignments/:id/submissions", requireAuth, requireStudent, async 
         },
       });
     }
+    cacheDelPrefix(`assign:${assignment.classId}:`);
     res.status(201).json(sub);
   } catch (err) {
     console.error("Assignment submit error:", err);
@@ -1226,6 +1239,7 @@ app.post("/api/assignments/:assignmentId/submissions/:submissionId/grade", requi
         gradedAt: new Date(),
       },
     });
+    cacheDelPrefix(`assign:${assignment.classId}:`);
     // 파일(base64) 등 대용량을 보내지 않고 최소 정보만 반환
     res.json({
       id: submissionId,
@@ -1802,6 +1816,8 @@ app.delete("/api/replays/:id", requireAuth, requireTeacher, async (req, res) => 
     }
 
     await prisma.replay.delete({ where: { id: replayId } });
+    cacheDelPrefix(`replays:${replay.classId}:`);
+    cacheDelPrefix(`classes:detail:${replay.classId}:`);
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
