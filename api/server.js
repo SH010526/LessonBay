@@ -581,28 +581,53 @@ async function disableRlsIfOn() {
 }
 disableRlsIfOn();
 
-// Supabase 세션 기준으로 Prisma User 존재 보장 + 기본 active
+// Supabase 세션 기준으로 Prisma User 존재 보장 + 기본 active (Optimized)
 async function ensureUserExists(req) {
   if (!req?.user?.id) return null;
-  const safeEmail = req.user.email || `${req.user.id}@lessonbay.local`;
-  const derivedName = req.user.name || (safeEmail.includes("@") ? safeEmail.split("@")[0] : "사용자");
-  const payload = {
-    id: req.user.id,
-    email: safeEmail,
-    name: derivedName,
-    role: req.user.role === "teacher" ? "teacher" : req.user.role === "admin" ? "admin" : "student",
-    status: "active",
-    suspendedUntil: null,
-  };
+  const userId = req.user.id;
+
   try {
-    const u = await prisma.user.upsert({
-      where: { id: payload.id },
-      update: { email: payload.email, name: payload.name, role: payload.role },
-      create: payload,
+    let user = await prisma.user.findUnique({
+      where: { id: userId },
     });
-    return u;
+
+    const safeEmail = req.user.email || `${userId}@lessonbay.local`;
+    const derivedName = req.user.name || (safeEmail.includes("@") ? safeEmail.split("@")[0] : "사용자");
+    const roleFromToken = req.user.role === "teacher" ? "teacher" : req.user.role === "admin" ? "admin" : "student";
+
+    if (user) {
+      // User found (common case). Sync name/email in the background if they differ.
+      if (user.name !== derivedName || user.email !== safeEmail) {
+        prisma.user.update({
+          where: { id: userId },
+          data: { name: derivedName, email: safeEmail },
+        }).catch(err => console.error(`Async user sync failed for ${userId}:`, err));
+      }
+      // Return the user from the DB (source of truth for role/status).
+      return user;
+    }
+
+    // User not found (rare case, first login). Create them.
+    try {
+      user = await prisma.user.create({
+        data: {
+          id: userId,
+          email: safeEmail,
+          name: derivedName,
+          role: roleFromToken,
+          status: "active",
+        },
+      });
+      return user;
+    } catch (e) {
+      if (e.code === 'P2002') { // Prisma unique constraint error code
+        // The user was created by a concurrent request. Read them again.
+        return await prisma.user.findUnique({ where: { id: userId } });
+      }
+      throw e; // Re-throw other errors
+    }
   } catch (e) {
-    console.error("ensureUserExists failed:", e);
+    console.error(`ensureUserExists failed for user ${userId}:`, e);
     return null;
   }
 }
