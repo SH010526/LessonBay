@@ -1906,16 +1906,11 @@ async function ensureSeedData() {
   updateNav();
 
   // 원격 수업 목록 (느린 응답이면 타임아웃 후 백그라운드 재시도)
-  const fetchClassesRemote = (attempt = 0) => { 
-    const timeoutMs = attempt === 0 ? 4000 : 8000;  
-    apiGet("/api/classes", { silent: true, timeout: timeoutMs, tolerateTimeout: true })
+  const fetchClassesOnce = (attempt = 0) => {
+    const timeoutMs = attempt === 0 ? 4000 : 8000;
+    return apiGet("/api/classes", { silent: true, timeout: timeoutMs, tolerateTimeout: true })
       .then((classes) => {
-        if (!Array.isArray(classes) || !classes.length) {
-          if (attempt < 2) {
-            setTimeout(() => fetchClassesRemote(attempt + 1), 4000 * (attempt + 1)); 
-          }
-          return;
-        }
+        if (!Array.isArray(classes) || !classes.length) return false;
         const normalized = (classes || []).map(c => ({
           ...c,
           teacher: c.teacher?.name || c.teacherName || c.teacher || "-",
@@ -1924,22 +1919,30 @@ async function ensureSeedData() {
         }));
         if (normalized.length) setClasses(normalized);
         rerenderVisible();
+        return true;
       })
       .catch((e) => {
-        if (attempt < 2) {
-          setTimeout(() => fetchClassesRemote(attempt + 1), 4000 * (attempt + 1));
-          return;
-        }
-        console.error("classes fetch failed", e);
+        if (attempt >= 2) console.error("classes fetch failed", e);
+        return false;
       });
   };
-  if (!detailOnly && !hasCachedClasses) {
-    fetchClassesRemote(0);
-  }
+  const fetchClassesRemote = (attempt = 0) => {
+    return fetchClassesOnce(attempt).then((ok) => {
+      if (!ok && attempt < 2) {
+        setTimeout(() => fetchClassesRemote(attempt + 1), 4000 * (attempt + 1));
+      }
+      return ok;
+    });
+  };
 
-  // 원격 수강 정보 (캐시로 먼저 렌더, 백그라운드 갱신)
+  // 초기 fetch는 병렬 처리 (로그인/캐시 상태에 따라 조건부 실행)
+  const initialFetches = [];
+  if (!detailOnly && !hasCachedClasses) initialFetches.push(fetchClassesRemote(0));
   if (user && !hasCachedEnroll) {
-    fetchEnrollmentsForUser(user).then(() => rerenderVisible());
+    initialFetches.push(fetchEnrollmentsForUser(user, 0, { force: true, timeoutMs: 5000 }));
+  }
+  if (initialFetches.length) {
+    Promise.allSettled(initialFetches).then(() => rerenderVisible());
   }
 
   // 세션 동기화 완료 후 내비/페이지 재반영
