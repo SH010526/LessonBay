@@ -2065,9 +2065,11 @@ async function ensureSeedData() {
   };
 
   const cached = loadCachedClasses();
-  const hasCachedClasses = cached.length > 0;
+  // Filter out any persistent demo data
+  const realCached = cached.filter(c => !c.id.startsWith("c_demo_"));
+  const hasCachedClasses = realCached.length > 0;
   if (hasCachedClasses) {
-    setClasses(cached);
+    setClasses(realCached);
   } else if (!detailOnly) {
     if (legacyClasses.length) {
       setClasses(legacyClasses);
