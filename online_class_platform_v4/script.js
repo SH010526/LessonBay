@@ -53,7 +53,7 @@ const _originalAlert = window.alert;
 window.alert = function (msg) {
   if (!msg) return;
   const s = String(msg);
-  if (s.includes("세션이 만료되었습니다") || s.includes("Session expired") || s.includes("다시 로그인")) {
+  if (s.includes("세션이 만료되었습니다") || s.includes("Session expired") || s.includes("다시 로그인") || s.includes("인증 토큰이 없습니다") || s.includes("토큰이 유효하지 않습니다")) {
     console.warn("Blocked alert:", s);
     return;
   }
@@ -283,7 +283,7 @@ function showToast(msg, type = "info", duration = 3000) {
   if (!msg) return;
   // User requested to suppress session expired alerts
   const s = String(msg);
-  if (s.includes("세션이 만료되었습니다") || s.includes("Session expired") || s.includes("다시 로그인")) return;
+  if (s.includes("세션이 만료되었습니다") || s.includes("Session expired") || s.includes("다시 로그인") || s.includes("인증 토큰이 없습니다") || s.includes("토큰이 유효하지 않습니다")) return;
 
   let el = document.getElementById("toast");
   if (!el) {
@@ -2336,13 +2336,22 @@ function clearDataCache() {
 
 function handleUnauthorized(silent = false) {
   if (__authInvalidated) return;
+
+  // Check if user was actually logged in before - don't reload for guests
+  const wasLoggedIn = !!getUser();
+
   __authInvalidated = true;
   setUser(null);
   clearDataCache(); // Fix leak
   clearSupabaseSessions();
   clearOldAuthKeys();
   updateNav();
-  setTimeout(() => location.reload(), 500); // Reload faster to clear stale UI state
+
+  // Only reload if user was actually logged in (session expired)
+  // Don't reload for guests who never had a session
+  if (wasLoggedIn) {
+    setTimeout(() => location.reload(), 500); // Reload faster to clear stale UI state
+  }
 }
 
 // ? Supabase 로그아웃 포함
