@@ -65,29 +65,31 @@ async function loadLivePage() {
     const LK_VERSION = "2.16.1";
 
     const resolveLK = () => {
-      // UMD 전역 이름을 모두 확인하고, 없으면 별칭을 설정
       let candidate = window.LiveKit || window.LivekitClient || window.livekitClient || window.livekit;
 
-      // UMD 번들에서 default로 감싸진 경우를 처리
+      // Handle UMD default export wrapper
       if (candidate && candidate.default && (candidate.default.connect || candidate.default.Room)) {
         candidate = candidate.default;
       }
 
-      if (!window.LiveKit && candidate) window.LiveKit = candidate;
-      if (!window.LivekitClient && candidate) window.LivekitClient = candidate;
-
-      const lk = candidate || window.LiveKit || window.LivekitClient || window.livekitClient || window.livekit;
-      if (lk && (lk.connect || lk.Room)) {
-        window.LiveKit = window.LiveKit || lk;
-        window.LivekitClient = window.LivekitClient || lk;
+      // Set globals if found
+      if (candidate) {
+        if (!window.LiveKit) window.LiveKit = candidate;
+        if (!window.LivekitClient) window.LivekitClient = candidate;
       }
-      return lk;
+
+      // Final check
+      const finalClient = candidate || window.LiveKit || window.LivekitClient || window.livekitClient || window.livekit;
+      if (finalClient && (finalClient.connect || finalClient.Room)) {
+        return finalClient;
+      }
+      return null;
     };
 
-    let LK = resolveLK();
-    if (LK && LK.connect) return LK;
+    let client = resolveLK();
+    if (client) return client;
 
-    // 로컬 번들 강제 로드 (Live Server에서 404/304 캐싱될 때를 대비)
+    // 1) Force load local UMD
     await new Promise((resolve) => {
       const script = document.createElement("script");
       script.src = "vendor/livekit-client.umd.js?v=" + Date.now();
@@ -96,11 +98,10 @@ async function loadLivePage() {
       script.onerror = resolve;
       document.head.appendChild(script);
     });
-    LK = resolveLK();
-    if (LK && LK.connect) return LK;
+    client = resolveLK();
+    if (client) return client;
 
-    // 최종 CDN fallback
-    // 1) UMD
+    // 2) CDN UMD
     await new Promise((resolve) => {
       const script = document.createElement("script");
       script.src = `https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.umd.min.js`;
@@ -109,23 +110,21 @@ async function loadLivePage() {
       script.onerror = resolve;
       document.head.appendChild(script);
     });
-    LK = resolveLK();
-    if (LK && LK.connect) return LK;
+    client = resolveLK();
+    if (client) return client;
 
-    // 2) ESM 동적 import (jsdelivr, 명시 버전)
+    // 3) ESM dynamic import
     try {
       const mod = await import(`https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.esm.mjs`);
-      LK = mod?.default || mod;
-      if (LK && (LK.connect || LK.Room)) {
-        window.LiveKit = window.LiveKit || LK;
-        window.LivekitClient = window.LivekitClient || LK;
-        return LK;
+      client = mod?.default || mod;
+      if (client && (client.connect || client.Room)) {
+        window.LiveKit = window.LiveKit || client;
+        window.LivekitClient = window.LivekitClient || client;
+        return client;
       }
-    } catch (_) {
-      // ignore
-    }
+    } catch (_) { /* ignore */ }
 
-    return LK;
+    return client;
   }
 
   const LK = await ensureLiveKitClient();
