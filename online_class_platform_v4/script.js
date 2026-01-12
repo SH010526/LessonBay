@@ -2238,6 +2238,7 @@ function handleUnauthorized() {
   // But strictly, apiGet calls this.
   // Let's rely on showToast(..., "warn") here, but suppress it in apiGet.
   showToast("세션이 만료되었습니다. 다시 로그인해 주세요.", "warn");
+  setTimeout(() => location.reload(), 1500); // Reload to clear stale UI state
 }
 
 // ? Supabase 로그아웃 포함
