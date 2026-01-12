@@ -1,12 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Optimized Student Dashboard for Online Class Platform">
+    <meta name="description" content="온라인 강의 플랫폼 학생 대시보드">
     <meta name="theme-color" content="#4F46E5">
-    <title>Student Dashboard - LessonBay</title>
-    
+    <title>학생 대시보드 - LessonBay</title>
+
     <!-- Critical CSS Inline -->
     <style>
         /* Critical Path CSS - Inline for faster first paint */
@@ -62,6 +63,7 @@
             font-size: 24px;
             font-weight: bold;
             color: var(--primary-color);
+            text-decoration: none;
         }
 
         .header-actions {
@@ -150,6 +152,7 @@
             0% {
                 background-position: 200% 0;
             }
+
             100% {
                 background-position: -200% 0;
             }
@@ -213,6 +216,7 @@
             justify-content: space-between;
             align-items: center;
             transition: background-color 0.2s ease;
+            cursor: pointer;
         }
 
         .course-item:hover {
@@ -287,45 +291,31 @@
             }
         }
 
-        /* Accessibility improvements */
-        .sr-only {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            padding: 0;
-            margin: -1px;
-            overflow: hidden;
-            clip: rect(0, 0, 0, 0);
-            white-space: nowrap;
-            border-width: 0;
-        }
-
         /* Loading state */
         .loading {
             opacity: 0.7;
             pointer-events: none;
         }
 
-        /* Will-change for performance */
         .card {
             will-change: transform;
         }
     </style>
 
-    <!-- Non-critical CSS deferred -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    
-    <!-- DNS Prefetch for external resources -->
-    <link rel="dns-prefetch" href="//cdn.jsdelivr.net">
+    <!-- Supabase & Global Script -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="script.js" defer></script>
 </head>
+
 <body>
     <!-- Header -->
     <header>
         <div class="header-content">
-            <div class="logo">📚 LessonBay</div>
+            <a href="index.html" class="logo">📚 LessonBay</a>
             <div class="header-actions">
-                <button class="btn btn-primary" id="refreshBtn">Refresh</button>
+                <a href="classes.html" class="btn">강의 목록</a>
+                <button class="btn btn-primary" id="refreshBtn">새로고침</button>
+                <a href="logout.html" class="btn">로그아웃</a>
             </div>
         </div>
     </header>
@@ -335,14 +325,6 @@
         <!-- Statistics Section -->
         <section class="stats-container" id="statsContainer">
             <!-- Skeleton loaders for stats -->
-            <div class="stat-box skeleton-card">
-                <div class="skeleton skeleton-title"></div>
-                <div class="skeleton skeleton-text"></div>
-            </div>
-            <div class="stat-box skeleton-card">
-                <div class="skeleton skeleton-title"></div>
-                <div class="skeleton skeleton-text"></div>
-            </div>
             <div class="stat-box skeleton-card">
                 <div class="skeleton skeleton-title"></div>
                 <div class="skeleton skeleton-text"></div>
@@ -363,13 +345,6 @@
                 <div class="skeleton skeleton-text" style="width: 80%;"></div>
             </div>
 
-            <!-- Learning Progress Card with skeleton -->
-            <div class="card skeleton-card" id="progressCard">
-                <div class="skeleton skeleton-title"></div>
-                <div class="skeleton skeleton-text" style="width: 100%; height: 8px; margin: 12px 0;"></div>
-                <div class="skeleton skeleton-text"></div>
-            </div>
-
             <!-- Recent Activity Card with skeleton -->
             <div class="card skeleton-card" id="activityCard">
                 <div class="skeleton skeleton-title"></div>
@@ -377,79 +352,76 @@
                 <div class="skeleton skeleton-text"></div>
             </div>
         </div>
-
-        <!-- Performance Metrics (hidden by default) -->
-        <div id="performanceMetrics" style="display: none;"></div>
     </main>
 
     <!-- Footer -->
     <footer class="footer">
-        <p>&copy; 2026 LessonBay. All rights reserved. | Last updated: <time id="lastUpdated">Just now</time></p>
+        <p>&copy; 2026 LessonBay. All rights reserved. | 마지막 업데이트: <time id="lastUpdated">방금 전</time></p>
     </footer>
 
-    <!-- Deferred Script Loading -->
+    <!-- Script -->
     <script>
-        // Performance monitoring
-        if ('PerformanceObserver' in window) {
-            try {
-                const perfObserver = new PerformanceObserver((list) => {
-                    for (const entry of list.getEntries()) {
-                        if (entry.duration > 100) {
-                            console.log(`Slow task detected: ${entry.name} took ${entry.duration.toFixed(2)}ms`);
-                        }
-                    }
-                });
-                perfObserver.observe({ entryTypes: ['longtask'] });
-            } catch (e) {
-                console.log('PerformanceObserver not fully supported');
-            }
-        }
-
-        // Lazy load non-critical scripts
-        function loadDeferredScripts() {
-            // This is where non-critical scripts would be loaded
-            console.log('Deferred scripts loaded');
-        }
-
         // Initialize dashboard data
         async function initializeDashboard() {
             try {
-                // Simulate API call with realistic delay
-                await new Promise(resolve => setTimeout(resolve, 800));
-                
-                renderDashboard({
-                    stats: [
-                        { number: '12', label: 'Active Courses' },
-                        { number: '87%', label: 'Average Score' },
-                        { number: '45', label: 'Assignments Done' },
-                        { number: '23h', label: 'Learning Time' }
-                    ],
-                    courses: [
-                        { name: 'Advanced JavaScript', progress: 85, status: 'active' },
-                        { name: 'React Fundamentals', progress: 65, status: 'active' },
-                        { name: 'Python for Data Science', progress: 100, status: 'completed' },
-                        { name: 'Web Design Basics', progress: 40, status: 'active' }
-                    ],
-                    activities: [
-                        'Completed Quiz: Advanced JavaScript Concepts',
-                        'Submitted Assignment: React Components',
-                        'Started Course: Python for Data Science',
-                        'Earned Badge: 10 Days Streak',
-                        'Joined Study Group: Web Development'
-                    ]
-                });
+                // Wait for Supabase to be ready from global script
+                if (typeof waitForSupabaseClient === 'function') {
+                    await waitForSupabaseClient();
+                } else if (!window.supabaseClient) {
+                    // Fallback manual init if script.js fails for some reason
+                    const SUPABASE_URL = "https://pqvdexhxytahljultmjd.supabase.co";
+                    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxdmRleGh4eXRhaGxqdWx0bWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5NjMzNTMsImV4cCI6MjA4MTUzOTM1M30.WzJWY3-92Bwkic-Wb2rOmZ1joEUj-s69cSL2hPT79fQ";
+                    if (window.supabase) {
+                        window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+                    }
+                }
+
+                // Get User
+                let user = null;
+                if (typeof getUser === 'function') {
+                    user = getUser();
+                } else {
+                    const { data } = await window.supabaseClient.auth.getSession();
+                    user = data?.session?.user;
+                }
+
+                if (!user) {
+                    window.location.href = 'login.html';
+                    return;
+                }
+
+                // Fetch enrollments with class details
+                const { data: enrollments, error } = await window.supabaseClient
+                    .from('enrollments')
+                    .select('*, classes(*)')
+                    .eq('user_id', user.id);
+
+                if (error) throw error;
+
+                // Process data
+                const courses = enrollments && enrollments.length > 0 ? enrollments.map(e => ({
+                    id: e.class_id,
+                    name: e.classes ? e.classes.title : '삭제된 수업',
+                    progress: 0,
+                    status: 'active'
+                })) : [];
+
+                // Update Stats
+                const stats = [
+                    { number: courses.length, label: '수강 중인 강좌' },
+                    { number: '0%', label: '평균 진도율' }
+                ];
+
+                // Render
+                renderStats(stats);
+                renderCourses(courses);
+                renderActivities([]); // No activity feed yet
+                updateLastUpdated();
+
             } catch (error) {
                 console.error('Failed to initialize dashboard:', error);
-                showErrorMessage('Failed to load dashboard. Please try again.');
+                showErrorMessage('대시보드를 불러오는데 실패했습니다.');
             }
-        }
-
-        // Render dashboard with data
-        function renderDashboard(data) {
-            renderStats(data.stats);
-            renderCourses(data.courses);
-            renderActivities(data.activities);
-            updateLastUpdated();
         }
 
         // Render statistics
@@ -466,10 +438,20 @@
         // Render courses
         function renderCourses(courses) {
             const activeCoursesCard = document.getElementById('activeCoursesCard');
+
+            if (!courses || courses.length === 0) {
+                activeCoursesCard.innerHTML = `
+                    <h3 class="card-title">📖 수강 중인 강좌</h3>
+                    <p class="card-content">아직 수강 중인 강좌가 없습니다.</p>
+                    <a href="classes.html" class="btn btn-primary" style="margin-top:10px; display:inline-block;">강좌 둘러보기</a>
+                `;
+                return;
+            }
+
             const courseListHTML = courses.map(course => {
                 const statusClass = `status-${course.status}`;
                 return `
-                    <li class="course-item">
+                    <li class="course-item" onclick="location.href='class_detail.html?id=${course.id}'">
                         <div>
                             <div class="course-name">${course.name}</div>
                             <div class="progress-bar">
@@ -482,7 +464,7 @@
             }).join('');
 
             activeCoursesCard.innerHTML = `
-                <h3 class="card-title">📖 Active Courses</h3>
+                <h3 class="card-title">📖 수강 중인 강좌</h3>
                 <ul class="course-list">
                     ${courseListHTML}
                 </ul>
@@ -492,6 +474,14 @@
         // Render activities
         function renderActivities(activities) {
             const activityCard = document.getElementById('activityCard');
+            if (activities.length === 0) {
+                activityCard.innerHTML = `
+                    <h3 class="card-title">🎯 최근 활동</h3>
+                    <p class="card-content">최근 활동 내역이 없습니다.</p>
+                `;
+                return;
+            }
+
             const activitiesHTML = activities.map(activity => `
                 <div style="padding: 8px 0; border-bottom: 1px solid var(--border-color); font-size: 14px;">
                     ✓ ${activity}
@@ -499,7 +489,7 @@
             `).join('');
 
             activityCard.innerHTML = `
-                <h3 class="card-title">🎯 Recent Activity</h3>
+                <h3 class="card-title">🎯 최근 활동</h3>
                 ${activitiesHTML}
             `;
         }
@@ -516,10 +506,10 @@
             dashboard.innerHTML = `
                 <div class="card" style="grid-column: 1/-1; text-align: center; padding: 40px;">
                     <div style="font-size: 48px; margin-bottom: 16px;">⚠️</div>
-                    <h3 class="card-title">Oops! Something went wrong</h3>
+                    <h3 class="card-title">오류가 발생했습니다</h3>
                     <p class="card-content">${message}</p>
                     <button class="btn btn-primary" onclick="location.reload();" style="margin-top: 16px;">
-                        Retry
+                        다시 시도
                     </button>
                 </div>
             `;
@@ -531,32 +521,13 @@
             initializeDashboard();
         });
 
-        // Defer non-critical initialization
+        // Initialize
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', initializeDashboard);
         } else {
-            // Use requestIdleCallback if available, otherwise use setTimeout
-            if ('requestIdleCallback' in window) {
-                requestIdleCallback(initializeDashboard);
-            } else {
-                setTimeout(initializeDashboard, 1);
-            }
+            initializeDashboard();
         }
-
-        // Request idle callback for background tasks
-        if ('requestIdleCallback' in window) {
-            requestIdleCallback(() => {
-                console.log('Idle time available for non-critical tasks');
-            });
-        }
-
-        // Unload handler
-        window.addEventListener('beforeunload', () => {
-            console.log('Dashboard unloading');
-        });
     </script>
-
-    <!-- Preload critical resources -->
-    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap">
 </body>
+
 </html>
