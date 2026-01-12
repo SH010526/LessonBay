@@ -293,7 +293,7 @@ nav{
 }
 .btn:hover{ transform: translateY(-1px); box-shadow: 0 12px 22px rgba(17,24,39,.10); }
 .btn:active{ transform: translateY(0px); }
-.btn:disabled{ opacity:.55; cursor:not-allowed; transform:none; box-shadow:none; }
+.btn:disabled{ opacity:.55; cursor:not-allowed; transform:none; box-shadow:none; filter:grayscale(100%); }
 
 .btn.primary{
   border: 0;

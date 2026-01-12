@@ -56,6 +56,25 @@ function handleSignupPage() {
       const resendBtn = document.getElementById("otpResendBtn");
       const statusEl = document.getElementById("otpStatus");
 
+      let resendTimer = null;
+      function startResendCooldown(seconds) {
+        if (!resendBtn) return;
+        resendBtn.disabled = true;
+        let left = seconds;
+        resendBtn.textContent = `재전송 (${left}초)`;
+        if (resendTimer) clearInterval(resendTimer);
+        resendTimer = setInterval(() => {
+          left -= 1;
+          if (left <= 0) {
+            clearInterval(resendTimer);
+            resendBtn.disabled = false;
+            resendBtn.textContent = "재전송";
+          } else {
+            resendBtn.textContent = `재전송 (${left}초)`;
+          }
+        }, 1000);
+      }
+
       verifyBtn?.addEventListener("click", async () => {
         const code = (document.getElementById("otpInput")?.value || "").trim();
         if (!code) { if (statusEl) statusEl.textContent = "인증번호를 입력하세요."; return; }
@@ -76,13 +95,23 @@ function handleSignupPage() {
       resendBtn?.addEventListener("click", async () => {
         if (!pending) return;
         try {
+          if (resendTimer) clearInterval(resendTimer);
+          // Prevent double click during async
+          resendBtn.disabled = true;
+
           setBtnLoading(resendBtn, true, "재전송 중...");
           await supabaseSignupWithEmailConfirm(pending.name, pending.email, pending.pw, pending.role);
           if (statusEl) statusEl.textContent = "인증코드를 재전송했습니다. 메일을 확인하세요.";
+
+          // Start cooldown only on success
+          setBtnLoading(resendBtn, false); // restore text first or let cooldown override
+          startResendCooldown(60);
+
         } catch (e) {
           if (statusEl) statusEl.textContent = e?.message || "재전송 실패";
+          setBtnLoading(resendBtn, false); // Restore original state on error
         } finally {
-          setBtnLoading(resendBtn, false);
+          // loading helper handles text restoration, but we need to ensure cooldown logic takes over if successful
         }
       });
 

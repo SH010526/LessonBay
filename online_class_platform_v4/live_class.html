@@ -1,5 +1,6 @@
 ﻿<!DOCTYPE html>
 <html lang="ko">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -12,6 +13,7 @@
   <script src="script.js" defer></script>
   <script src="pages/live_class.js" defer></script>
 </head>
+
 <body>
   <nav>
     <div class="container nav-inner">
@@ -38,37 +40,59 @@
             <div class="muted2" style="font-size:12px; font-weight:950;">라이브 준비</div>
           </div>
           <div class="panelBody">
-            <div class="videoFrame" id="videoFrame">
-              <video id="liveVideo" class="liveVideo" autoplay playsinline muted></video>
-              <div class="videoOverlay" id="videoOverlay">카메라/마이크를 연결하면 라이브가 시작됩니다.</div>
-            </div>
-            <div style="display:flex; gap:6px; align-items:center; margin:8px 0 4px 0; flex-wrap:wrap;">
-              <button class="btn" id="remoteViewGrid">그리드 뷰</button>
-              <button class="btn" id="remoteViewSpeaker">스피커 뷰</button>
-              <div class="muted" id="remotePinnedInfo" style="font-size:12px;"></div>
-            </div>
-            <div id="remoteVideos" class="remoteGrid"></div>
-            <div class="remotePager">
-              <button class="btn" id="remotePrev">이전</button>
-              <span class="muted" id="remotePageInfo" style="margin:0 8px;">0/0</span>
-              <button class="btn" id="remoteNext">다음</button>
+            <div id="preJoinView"
+              style="display:none; text-align:center; padding:20px; border-bottom:1px solid rgba(15,23,42,.10);">
+              <div style="font-size:18px; font-weight:1000; margin-bottom:14px;">수업 입장 전 카메라/마이크 확인</div>
+              <div class="videoFrame" style="max-width:480px; margin:0 auto; aspect-ratio:16/9; position:relative;">
+                <video id="previewVideo" autoplay playsinline muted
+                  style="width:100%; height:100%; object-fit:cover; border-radius:18px;"></video>
+                <div
+                  style="position:absolute; bottom:12px; left:50%; transform:translateX(-50%); display:flex; gap:8px;">
+                  <button class="btn" id="previewCamBtn" style="padding:6px 12px; font-size:12px;">카메라 끄기</button>
+                  <button class="btn" id="previewMicBtn" style="padding:6px 12px; font-size:12px;">마이크 끄기</button>
+                </div>
+              </div>
+              <div style="margin-top:20px;">
+                <button class="btn primary" id="btnJoinRoom" style="padding:12px 32px; font-size:16px;">수업 입장하기</button>
+              </div>
+              <div class="muted" style="margin-top:12px; font-size:13px;">카메라와 마이크 권한을 허용해주세요.</div>
             </div>
 
-            <div class="controlsRow">
-              <button class="btn primary" id="btnConnect">카메라/마이크 연결</button>
-              <button class="btn" id="btnShare">화면 공유</button>
-              <button class="btn" id="btnRecord">녹화 시작</button>
-              <button class="btn" id="btnLeave">나가기</button>
-              <button class="btn" id="btnQuality">고화질 유지</button>
+            <div id="liveRoomView" style="display:none;">
+              <div class="videoFrame" id="videoFrame">
+                <video id="liveVideo" class="liveVideo" autoplay playsinline muted></video>
+                <div class="videoOverlay" id="videoOverlay">입장 대기 중...</div>
+              </div>
+              <div style="display:flex; gap:6px; align-items:center; margin:8px 0 4px 0; flex-wrap:wrap;">
+                <button class="btn" id="remoteViewGrid">그리드 뷰</button>
+                <button class="btn" id="remoteViewSpeaker">스피커 뷰</button>
+                <div class="muted" id="remotePinnedInfo" style="font-size:12px;"></div>
+              </div>
+              <div id="remoteVideos" class="remoteGrid"></div>
+              <div class="remotePager">
+                <button class="btn" id="remotePrev">이전</button>
+                <span class="muted" id="remotePageInfo" style="margin:0 8px;">0/0</span>
+                <button class="btn" id="remoteNext">다음</button>
+              </div>
 
-              <div class="controlMini">
-                <label>화면 비율</label>
-                <select id="arSelect">
-                  <option value="16/9" selected>16:9</option>
-                  <option value="4/3">4:3</option>
-                  <option value="1/1">1:1</option>
-                  <option value="21/9">21:9</option>
-                </select>
+              <div class="controlsRow">
+                <!-- btnConnect 제거 (pre-join으로 대체) -->
+                <button class="btn" id="btnLocalCam">카메라 끄기</button>
+                <button class="btn" id="btnLocalMic">마이크 끄기</button>
+                <button class="btn" id="btnShare">화면 공유</button>
+                <button class="btn" id="btnRecord">녹화 시작</button>
+                <button class="btn danger" id="btnLeave">나가기</button>
+                <button class="btn" id="btnQuality">고화질 유지</button>
+
+                <div class="controlMini">
+                  <label>화면 비율</label>
+                  <select id="arSelect">
+                    <option value="16/9" selected>16:9</option>
+                    <option value="4/3">4:3</option>
+                    <option value="1/1">1:1</option>
+                    <option value="21/9">21:9</option>
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -97,4 +121,5 @@
 
   <div class="footer">© 2025 LessonBay. All rights reserved.</div>
 </body>
+
 </html>
