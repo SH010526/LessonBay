@@ -84,7 +84,7 @@ function loadSupabaseSdkOnce() {
 async function waitForSupabaseClient(timeoutMs = 8000, intervalMs = 150) {
   const start = Date.now();
   if (!supabaseClient) {
-    try { await loadSupabaseSdkOnce(); } catch (_) {}
+    try { await loadSupabaseSdkOnce(); } catch (_) { }
   }
   while (!supabaseClient && Date.now() - start < timeoutMs) {
     ensureSupabaseClient();
@@ -157,7 +157,7 @@ function readSupabaseSessionFromStorage(storage) {
       if (parsed.currentSession) return parsed.currentSession;
       if (parsed.data?.session) return parsed.data.session;
     }
-  } catch (_) {}
+  } catch (_) { }
   return null;
 }
 
@@ -175,7 +175,7 @@ async function getAuthToken() {
     try {
       const { data } = await supabaseClient.auth.getSession();
       token = data?.session?.access_token || "";
-    } catch (_) {}
+    } catch (_) { }
   }
   let storedSession = null;
   if (!token) {
@@ -190,7 +190,7 @@ async function getAuthToken() {
         refresh_token: storedSession.refresh_token,
       });
       token = data?.session?.access_token || "";
-    } catch (_) {}
+    } catch (_) { }
   }
   return token;
 }
@@ -349,7 +349,7 @@ function bootPageScripts() {
   });
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 1000) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   if (!timeoutMs) return fetch(url, options); // 의미 : 타임아웃이 아니라면 그냥 fetch 실행
   // 
   //fetch 뜻 : 자바스크립트에서 제공하는 내장 함수로, 네트워크를 통해 리소스를 비동기적으로 가져오는 데 사용됩니다.
@@ -690,7 +690,7 @@ async function forceDownload(url, filename = "download") {
   } catch (err) {
     console.error("forceDownload failed", err);
     // 마지막 수단: 현재 탭 이동 (팝업 차단 방지)
-    try { location.href = url; } catch (_) {}
+    try { location.href = url; } catch (_) { }
   }
 }
 
@@ -899,7 +899,7 @@ try {
   if (typeof window !== "undefined") {
     window.__deleteVodBlob = (key) => { vodDelete(key); };
   }
-} catch(_) {}
+} catch (_) { }
 
 const OLD_USER_KEYS = ["currentUser", "LessonBay_currentUser", "user", "authUser"];
 const OLD_USERS_KEYS = ["users", "LessonBay_users"];
@@ -932,7 +932,7 @@ const HTML_QUERY_IGNORED = new Set([
 let assignPendingSelect = null;
 let __detailPageNonce = 0;
 
-const $ = (sel, el = document) => el.querySelector(sel); 
+const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
 function safeParse(json, fallback) {
@@ -1013,14 +1013,14 @@ function readLegacyClassesFromStorage() {
         if (id) seen.add(id);
         if (sig) seen.add(sig);
       });
-    } catch (_) {}
+    } catch (_) { }
   });
   return merged;
 }
 function clearLegacyClassesFromStorage() {
   if (typeof localStorage === "undefined") return;
   LEGACY_CLASS_KEYS.forEach((key) => {
-    try { localStorage.removeItem(key); } catch (_) {}
+    try { localStorage.removeItem(key); } catch (_) { }
   });
 }
 async function maybeRestoreLegacyClasses(legacyClasses, user) {
@@ -1085,7 +1085,7 @@ async function maybeRestoreLegacyClasses(legacyClasses, user) {
       const merged = mergeClassLists(normalized, legacyClasses);
       if (merged.length) setClasses(merged);
     }
-  } catch (_) {}
+  } catch (_) { }
 
   return createdCount > 0;
 }
@@ -1156,7 +1156,7 @@ async function hydrateThumb(el, raw) {
           el.src = refreshed;
           return;
         }
-      } catch (_) {}
+      } catch (_) { }
       el.dataset.thumbFallback = "1";
       el.src = FALLBACK_THUMB;
     }, { once: true });
@@ -1181,7 +1181,7 @@ async function hydrateThumb(el, raw) {
 }
 
 async function ensureUserReady(timeoutMs = 1200) {
-  const sync = syncLocalUserFromSupabaseSession().catch(() => {});
+  const sync = syncLocalUserFromSupabaseSession().catch(() => { });
   await Promise.race([sync, sleep(timeoutMs)]);
   return getUser();
 }
@@ -1235,7 +1235,7 @@ function slimClassForCache(c) {
 
 function cacheClassList(list) {
   const slim = (Array.isArray(list) ? list : []).map(slimClassForCache).filter(Boolean);
-  try { sessionStorage.setItem(CLASS_CACHE_KEY, JSON.stringify({ at: Date.now(), list: slim })); } catch (_) {}
+  try { sessionStorage.setItem(CLASS_CACHE_KEY, JSON.stringify({ at: Date.now(), list: slim })); } catch (_) { }
 }
 
 function loadCachedClasses() {
@@ -1260,7 +1260,7 @@ function cacheClassDetail(cls) {
     const map = parsed.map && typeof parsed.map === "object" ? parsed.map : {};
     map[slim.id] = { at: Date.now(), data: slim };
     sessionStorage.setItem(CLASS_DETAIL_CACHE_KEY, JSON.stringify({ map }));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function loadCachedClassDetail(id) {
@@ -1292,7 +1292,7 @@ function cacheEnrollments(user, list) {
   if (!key) return;
   try {
     sessionStorage.setItem(ENROLL_CACHE_KEY, JSON.stringify({ at: Date.now(), key, list: list || [] }));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function loadCachedEnrollments(user) {
@@ -1366,7 +1366,7 @@ function prefetchPage(href) {
       const parsed = safeParse(cached, null);
       if (parsed?.at && Date.now() - parsed.at < PREFETCH_PAGE_TTL_MS) return;
     }
-  } catch (_) {}
+  } catch (_) { }
   if (document.querySelector(`link[data-prefetch="${url}"]`)) return;
   const link = document.createElement("link");
   link.rel = "prefetch";
@@ -1375,7 +1375,7 @@ function prefetchPage(href) {
   document.head.appendChild(link);
   try {
     sessionStorage.setItem(key, JSON.stringify({ at: Date.now() }));
-  } catch (_) {}
+  } catch (_) { }
 
   // HTML 프리패치 캐시 (soft nav용)
   prefetchPageHtml(url);
@@ -1429,7 +1429,7 @@ function setCachedPageHtml(url, html) {
   try {
     const key = pageHtmlCacheKey(url);
     sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), html }));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 async function fetchPageHtml(url) {
@@ -1450,7 +1450,7 @@ function prefetchPageHtml(url) {
   fetch(normalized, { headers: { "X-Requested-With": "fetch" } })
     .then((res) => (res.ok ? res.text() : null))
     .then((html) => { if (html) setCachedPageHtml(normalized, html); })
-    .catch(() => {});
+    .catch(() => { });
 }
 
 function prefetchCorePages() {
@@ -1499,8 +1499,8 @@ function warmupBackend() {
   if (!isProdOrigin()) return;
   const ping = () => {
     try {
-      fetch(`${API_BASE_URL}/api/health`, { cache: "no-store", keepalive: true }).catch(() => {});
-    } catch (_) {}
+      fetch(`${API_BASE_URL}/api/health`, { cache: "no-store", keepalive: true }).catch(() => { });
+    } catch (_) { }
   };
   ping();
   __warmupTimer = setInterval(() => {
@@ -1512,7 +1512,7 @@ function warmupBackend() {
 function cachePrefetchClass(cls) {
   const slim = slimClassForCache(cls);
   if (!slim) return;
-  try { sessionStorage.setItem(PREFETCH_CLASS_KEY, JSON.stringify({ at: Date.now(), cls: slim })); } catch (_) {}
+  try { sessionStorage.setItem(PREFETCH_CLASS_KEY, JSON.stringify({ at: Date.now(), cls: slim })); } catch (_) { }
 }
 
 function consumePrefetchClass(expectId) {
@@ -1527,13 +1527,13 @@ function consumePrefetchClass(expectId) {
   } catch (_) {
     return null;
   } finally {
-    try { sessionStorage.removeItem(PREFETCH_CLASS_KEY); } catch (_) {}
+    try { sessionStorage.removeItem(PREFETCH_CLASS_KEY); } catch (_) { }
   }
 }
 
 function rememberClassId(id) {
   if (!id) return;
-  try { sessionStorage.setItem(LAST_CLASS_KEY, String(id)); } catch (_) {}
+  try { sessionStorage.setItem(LAST_CLASS_KEY, String(id)); } catch (_) { }
 }
 function readLastClassId() {
   try { return sessionStorage.getItem(LAST_CLASS_KEY) || ""; } catch (_) { return ""; }
@@ -1958,7 +1958,7 @@ function normalizeEnrollmentsForUser(u, classId) {
     }
 
     if (changed) setEnrollments(enroll);
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function parseEndTime(e) {
@@ -2051,7 +2051,7 @@ async function loadLocalSampleClasses() {
 }
 
 async function ensureSeedData() {
-  const sessionPromise = syncLocalUserFromSupabaseSession().catch(() => {});
+  const sessionPromise = syncLocalUserFromSupabaseSession().catch(() => { });
   const detailOnly = !!document.getElementById("detailRoot") && !document.getElementById("classGrid") && !document.getElementById("homePopular");
   const legacyClasses = readLegacyClassesFromStorage();
 
@@ -2113,7 +2113,8 @@ async function ensureSeedData() {
 
   // 원격 수업 목록 (느린 응답이면 타임아웃 후 백그라운드 재시도)
   const fetchClassesOnce = (attempt = 0) => {
-    const timeoutMs = attempt === 0 ? 4000 : 8000;
+    // Increase timeout to avoid premature fallback to demo data
+    const timeoutMs = attempt === 0 ? 15000 : 20000;
     return apiGet("/api/classes", { silent: true, timeout: timeoutMs, tolerateTimeout: true, cache: "no-store" })
       .then((classes) => {
         if (!Array.isArray(classes)) return false;
@@ -2173,7 +2174,7 @@ async function ensureSeedData() {
       }
       rerenderVisible();
       updateNav();
-    } catch (_) {}
+    } catch (_) { }
   });
 }
 
@@ -2212,7 +2213,7 @@ function clearSupabaseSessionStorage(storage) {
       if (k.startsWith("supabase.auth")) keys.add(k);
     }
     keys.forEach((k) => storage.removeItem(k));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function clearSupabaseSessions() {
@@ -2236,7 +2237,7 @@ async function doLogout(goHome = true) {
     if (supabaseClient) {
       await supabaseClient.auth.signOut();
     }
-  } catch (_) {}
+  } catch (_) { }
 
   clearSupabaseSessions();
   setUser(null);
@@ -2273,7 +2274,7 @@ function updateNav() {
 
   navRight.innerHTML = `
     <span class="user-pill">
-      <span class="user-avatar">${escapeHtml((user.name || "U").trim().slice(0,1).toUpperCase())}</span>
+      <span class="user-avatar">${escapeHtml((user.name || "U").trim().slice(0, 1).toUpperCase())}</span>
       <strong>${escapeHtml(user.name || "사용자")}</strong>
       ${roleBadge}
     </span>
@@ -2394,7 +2395,7 @@ function init() {
     if ($("#loginForm") || $("#signupForm")) {
       loadSupabaseSdkOnce()
         .then(() => { ensureSupabaseClient(); })
-        .catch(() => {});
+        .catch(() => { });
     }
 
     // NAV 먼저 렌더하여 느린 API 때문에 UI가 비지 않도록 함

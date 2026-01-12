@@ -90,43 +90,43 @@ async function loadLivePage() {
     // 로컬 번들 강제 로드 (Live Server에서 404/304 캐싱될 때를 대비)
     await new Promise((resolve) => {
       const script = document.createElement("script");
-    script.src = "vendor/livekit-client.umd.js?v=" + Date.now();
-    script.crossOrigin = "anonymous";
-    script.onload = resolve;
-    script.onerror = resolve;
-    document.head.appendChild(script);
-  });
-  LK = resolveLK();
-  if (LK && LK.connect) return LK;
+      script.src = "vendor/livekit-client.umd.js?v=" + Date.now();
+      script.crossOrigin = "anonymous";
+      script.onload = resolve;
+      script.onerror = resolve;
+      document.head.appendChild(script);
+    });
+    LK = resolveLK();
+    if (LK && LK.connect) return LK;
 
-  // 최종 CDN fallback
-  // 1) UMD
-  await new Promise((resolve) => {
-    const script = document.createElement("script");
-    script.src = `https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.umd.min.js`;
-    script.crossOrigin = "anonymous";
-    script.onload = resolve;
-    script.onerror = resolve;
-    document.head.appendChild(script);
-  });
-  LK = resolveLK();
-  if (LK && LK.connect) return LK;
+    // 최종 CDN fallback
+    // 1) UMD
+    await new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = `https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.umd.min.js`;
+      script.crossOrigin = "anonymous";
+      script.onload = resolve;
+      script.onerror = resolve;
+      document.head.appendChild(script);
+    });
+    LK = resolveLK();
+    if (LK && LK.connect) return LK;
 
-  // 2) ESM 동적 import (jsdelivr, 명시 버전)
-  try {
-    const mod = await import(`https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.esm.mjs`);
-    LK = mod?.default || mod;
-    if (LK && (LK.connect || LK.Room)) {
-      window.LiveKit = window.LiveKit || LK;
-      window.LivekitClient = window.LivekitClient || LK;
-      return LK;
+    // 2) ESM 동적 import (jsdelivr, 명시 버전)
+    try {
+      const mod = await import(`https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.esm.mjs`);
+      LK = mod?.default || mod;
+      if (LK && (LK.connect || LK.Room)) {
+        window.LiveKit = window.LiveKit || LK;
+        window.LivekitClient = window.LivekitClient || LK;
+        return LK;
+      }
+    } catch (_) {
+      // ignore
     }
-  } catch (_) {
-    // ignore
-  }
 
-  return LK;
-}
+    return LK;
+  }
 
   const LK = await ensureLiveKitClient();
   if (!LK || !(LK.connect || LK.Room)) {
@@ -173,7 +173,7 @@ async function loadLivePage() {
       track.attach(liveVideo);
       liveVideo.muted = true;
       const p = liveVideo.play?.();
-      if (p && typeof p.catch === "function") p.catch(() => {});
+      if (p && typeof p.catch === "function") p.catch(() => { });
     } catch (e) {
       console.error(e);
     }
@@ -327,13 +327,13 @@ async function loadLivePage() {
   async function disconnectRoom() {
     try {
       if (screenPub?.track && room?.localParticipant?.unpublishTrack) {
-        try { await room.localParticipant.unpublishTrack(screenPub.track, true); } catch (_) {}
+        try { await room.localParticipant.unpublishTrack(screenPub.track, true); } catch (_) { }
       }
       if (localCamTrack?.stop) localCamTrack.stop();
       if (localMicTrack?.stop) localMicTrack.stop();
       if (screenPub?.track?.stop) screenPub.track.stop();
       if (room) room.disconnect();
-    } catch (_) {}
+    } catch (_) { }
     room = null;
     localCamTrack = null;
     localMicTrack = null;
@@ -420,7 +420,7 @@ async function loadLivePage() {
         if (track.kind === "video") {
           addRemote(track, publication, participant);
         } else if (track.kind === "audio") {
-          try { track.attach(); } catch (_) {}
+          try { track.attach(); } catch (_) { }
         }
       });
       room.on(LK.RoomEvent.TrackUnsubscribed, (_track, publication) => {
@@ -458,7 +458,7 @@ async function loadLivePage() {
       } else {
         try {
           room.localParticipant.unpublishTrack(screenPub.track, true);
-        } catch (_) {}
+        } catch (_) { }
         screenPub = null;
         if (btnShare) btnShare.textContent = "화면 공유";
         if (localCamTrack) attachLocal(localCamTrack);
@@ -480,7 +480,7 @@ async function loadLivePage() {
   let recordChunks = [];
 
   if (btnRecord) {
-      if (!isOwnerTeacher) {
+    if (!isOwnerTeacher) {
       setGateDisabled(btnRecord, true);
       btnRecord.textContent = "녹화(선생님 전용)";
     } else {
@@ -595,25 +595,53 @@ async function loadLivePage() {
       console.error(e);
     }
 
-    const list = (getChat()[classId] || []);
-    chatLog.innerHTML = list.map(m => `
-      <div class="msg ${m.userId === user.id ? "me" : ""}">
-        <div class="mmeta">${displayName(m)} | ${displayRole(m)} | ${new Date(m.sentAt || m.at).toLocaleTimeString("ko-KR")}</div>
+    function renderMessageHtml(m) {
+      return `
+      <div class="msg ${m.userId === user.id ? "me" : ""} ${m.isOptimistic ? "optimistic" : ""}">
+        <div class="mmeta">${displayName(m)} | ${displayRole(m)} | ${new Date(m.sentAt || m.at || Date.now()).toLocaleTimeString("ko-KR")}</div>
         <div class="mtext">${escapeHtml(m.message || m.text || "")}</div>
       </div>
-    `).join("");
+    `;
+    }
+
+    const list = (getChat()[classId] || []);
+    chatLog.innerHTML = list.map(m => renderMessageHtml(m)).join("");
     chatLog.scrollTop = chatLog.scrollHeight;
   }
 
   async function pushChat(text) {
     const t = String(text || "").trim();
     if (!t) return;
+
+    // 1. Clear input immediately
+    if (chatInput) chatInput.value = "";
+
+    // 2. Optimistic Update
+    const tempMsg = {
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      message: t,
+      sentAt: new Date().toISOString(),
+      isOptimistic: true // CSS can style this transparently if needed
+    };
+    if (chatLog) {
+      const tempHtml = renderMessageHtml(tempMsg);
+      // Append directly
+      chatLog.insertAdjacentHTML('beforeend', tempHtml);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
     try {
       await apiPost(`/api/classes/${encodeURIComponent(classId)}/chat`, { message: t });
-      await renderChat();
+      // 3. Background sync (silent)
+      renderChat();
     } catch (e) {
       console.error(e);
       alert("채팅 전송 실패");
+      // Optional: remove optimistic message or retry
+      renderChat();
     }
   }
 

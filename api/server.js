@@ -2081,7 +2081,16 @@ app.get("/favicon.ico", (_req, res) => res.status(204).end());
 
 // Serve root and static assets
 app.get("/", (_req, res) => sendHtml(res, path.join(clientDir, "index.html")));
-app.use(express.static(clientDir));
+app.use(express.static(clientDir, {
+  maxAge: "1d",
+  setHeaders: (res, path) => {
+    if (path.endsWith(".html")) {
+      res.setHeader("Cache-Control", "no-cache");
+    } else {
+      res.setHeader("Cache-Control", "public, max-age=86400");
+    }
+  },
+}));
 
 // Slug-style detail URLs (support /class_detail/:id, /live_class/:id, /classes/:id)
 app.get(["/class_detail/:id", "/live_class/:id", "/classes/:id"], (req, res, next) => {
