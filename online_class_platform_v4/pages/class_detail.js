@@ -271,6 +271,7 @@ async function loadClassDetailPage() {
   let protectedLoaded = false;
   async function fetchMaterialsData() {
     if (!isDetailPageActive()) return;
+    if (!getUser()) return; // GUEST: Do not fetch protected data
     if (detailLoadCache.mats) return;
     detailLoadCache.mats = true;
     try {
@@ -288,7 +289,7 @@ async function loadClassDetailPage() {
   }
   async function fetchAssignmentsData() {
     if (!isDetailPageActive()) return;
-    if (!getUser()) return; // GUEST: Do not fetch assignments (protected)
+    if (!getUser()) return; // GUEST: Do not fetch protected data
     if (detailLoadCache.assigns) return;
     detailLoadCache.assigns = true;
     try {
@@ -306,6 +307,8 @@ async function loadClassDetailPage() {
   }
   async function fetchReviewsData() {
     if (!isDetailPageActive()) return;
+    // Reviews are protected in server.js (requireAuth)
+    if (!getUser()) return;
     if (detailLoadCache.revs) return;
     detailLoadCache.revs = true;
     try {
@@ -323,6 +326,8 @@ async function loadClassDetailPage() {
   }
   async function fetchQnaData() {
     if (!isDetailPageActive()) return;
+    // Q&A is protected in server.js (requireAuth)
+    if (!getUser()) return;
     if (detailLoadCache.qnas) return;
     detailLoadCache.qnas = true;
     try {
