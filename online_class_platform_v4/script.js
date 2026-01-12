@@ -2074,17 +2074,21 @@ async function ensureSeedData() {
     } else {
       // const builtin = getBuiltinClasses();
       // if (builtin.length) setClasses(builtin);
+      /*
       scheduleIdleTask(async () => {
         try {
           const local = await loadLocalSampleClasses();
-          if (Array.isArray(local) && local.length) {
-            setClasses(local);
+          // Force ignore demo data here too
+          const realLocal = local.filter(c => !c.id.startsWith("c_demo_"));
+          if (Array.isArray(realLocal) && realLocal.length) {
+            setClasses(realLocal);
             rerenderVisible();
           }
         } catch (e) {
           console.error("local sample classes load failed", e);
         }
       });
+      */
     }
   } else {
     setClasses([]);
