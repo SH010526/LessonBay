@@ -752,7 +752,6 @@ if (user?.role === "student" && activeStudent) {
 }
 // Start Preview immediately
 startPreview();
-}
 
 // ---------------------------
 // ? INIT
