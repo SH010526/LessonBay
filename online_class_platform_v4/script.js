@@ -2316,7 +2316,7 @@ function clearDataCache() {
   enrollFetchPromise = null;
 }
 
-function handleUnauthorized(silent = false) { 
+function handleUnauthorized(silent = false) {
   if (__authInvalidated) return;
   __authInvalidated = true;
   setUser(null);
@@ -2325,9 +2325,8 @@ function handleUnauthorized(silent = false) {
   clearOldAuthKeys();
   updateNav();
   // If silent (e.g. background check), do NOT show toast
-  if (!silent) {
-    showToast("세션이 만료되었습니다. 다시 로그인해 주세요.", "warn");
-  }
+  // User requested to remove this alert completely.
+
   setTimeout(() => location.reload(), 500); // Reload faster to clear stale UI state
 }
 
