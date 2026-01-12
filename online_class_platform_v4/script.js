@@ -447,48 +447,74 @@ async function apiGet(path, opts = {}) {
     if (!res.ok) {
       const txt = await res.text();
       if (res.status === 401) {
-        handleUnauthorized();
-        // 401인 경우 handleUnauthorized()에서 토스트를 띄우거나, 중복 방지를 위해 여기선 생략
-        throw new Error(txt || "Unauthorized");
+        handleUnauthorized(silent);
+        return null; // or throw?
       }
-      if (!silent) showToast(txt || "요청 실패", "danger");
-      throw new Error(txt);
+      if (!silent) showToast(safeParse(txt)?.error || "요청 실패", "danger");
+      throw new Error(safeParse(txt)?.error || "request failed");
     }
-    return res.json();
+    const json = await res.json();
+    return json;
   } catch (e) {
-    if (e?.name === "AbortError" && tolerateTimeout) return null;
+    if (tolerateTimeout && e.name === "AbortError") throw e;
+    if (!silent) {
+      // already handled unauthorized above?
+      // if we are here, it's network error or other.
+      if (!__authInvalidated) console.error(e);
+    }
     throw e;
   } finally {
-    if (!silent) hideLoading();
+    if (!silent) {
+      loadingCount = Math.max(0, loadingCount - 1);
+      setTimeout(() => {
+        if (loadingCount === 0) {
+          const el = document.getElementById("globalLoading");
+          if (el) el.remove();
+          loadingTimer = null;
+        }
+      }, 300);
+    }
   }
 }
 
-async function apiPost(path, body) {
-  showLoading();
+async function apiPost(path, body, opts = {}) {
+  const silent = !!opts.silent;
+  if (!silent) showLoading();
   try {
     const res = await fetch(`${API_BASE_URL}${path}`, {
       method: "POST",
       headers: await apiHeaders(),
-      body: JSON.stringify(body || {}),
+      body: JSON.stringify(body),
     });
-    if (res.ok) return res.json();
-    if (res.status === 401) handleUnauthorized();
-
-    // 응답 본문은 한 번만 소비 가능하므로 text로 읽고 JSON 시도
-    const raw = await res.text();
-    try {
-      const data = raw ? JSON.parse(raw) : null;
-      const msg = data?.detail || data?.error || raw || "알 수 없는 오류";
-      showToast(msg, "danger");
-      throw new Error(msg);
-    } catch (_) {
-      showToast(raw || "알 수 없는 오류", "danger");
-      throw new Error(raw || "알 수 없는 오류");
+    if (!res.ok) {
+      const txt = await res.text();
+      if (res.status === 401) {
+        handleUnauthorized(silent);
+        return null;
+      }
+      if (!silent) showToast(safeParse(txt)?.error || "요청 실패", "danger");
+      throw new Error(safeParse(txt)?.error || "request failed");
     }
+    const json = await res.json();
+    return json;
+  } catch (e) {
+    if (tolerateTimeout && e.name === "AbortError") throw e;
+    if (!silent) console.error(e);
+    throw e;
   } finally {
-    hideLoading();
+    if (!silent) {
+      loadingCount = Math.max(0, loadingCount - 1);
+      setTimeout(() => {
+        if (loadingCount === 0) {
+          const el = document.getElementById("globalLoading");
+          if (el) el.remove();
+          loadingTimer = null;
+        }
+      }, 300);
+    }
   }
 }
+
 
 // generic request (for DELETE 등)
 async function apiRequest(path, method = "GET", body = null) {
@@ -2290,7 +2316,7 @@ function clearDataCache() {
   enrollFetchPromise = null;
 }
 
-function handleUnauthorized() {
+function handleUnauthorized(silent = false) { 
   if (__authInvalidated) return;
   __authInvalidated = true;
   setUser(null);
@@ -2298,11 +2324,10 @@ function handleUnauthorized() {
   clearSupabaseSessions();
   clearOldAuthKeys();
   updateNav();
-  // Toast is handled by apiGet now, or we show it here?
-  // If apiGet suppresses it, we should show it here ONCE.
-  // But strictly, apiGet calls this.
-  // Let's rely on showToast(..., "warn") here, but suppress it in apiGet.
-  showToast("세션이 만료되었습니다. 다시 로그인해 주세요.", "warn");
+  // If silent (e.g. background check), do NOT show toast
+  if (!silent) {
+    showToast("세션이 만료되었습니다. 다시 로그인해 주세요.", "warn");
+  }
   setTimeout(() => location.reload(), 500); // Reload faster to clear stale UI state
 }
 
