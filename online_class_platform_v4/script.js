@@ -46,6 +46,20 @@ function ensureSupabaseClient() {
 }
 ensureSupabaseClient();
 
+// ? Hotfix: Suppress "Session expired" alerts globally
+// The user reports persistent alerts even after suppression.
+// We intercept window.alert and block specific messages.
+const _originalAlert = window.alert;
+window.alert = function (msg) {
+  if (!msg) return;
+  const s = String(msg);
+  if (s.includes("세션이 만료되었습니다") || s.includes("Session expired") || s.includes("다시 로그인")) {
+    console.warn("Blocked alert:", s);
+    return;
+  }
+  _originalAlert(msg);
+};
+
 function loadSupabaseSdkOnce() {
   if (typeof document === "undefined") return Promise.resolve(null);
   if (window.supabase && typeof window.supabase.createClient === "function") {
@@ -268,7 +282,8 @@ let loadingTimer = null;
 function showToast(msg, type = "info", duration = 3000) {
   if (!msg) return;
   // User requested to suppress session expired alerts
-  if (msg.includes("세션이 만료되었습니다") || msg.includes("Session expired")) return;
+  const s = String(msg);
+  if (s.includes("세션이 만료되었습니다") || s.includes("Session expired") || s.includes("다시 로그인")) return;
 
   let el = document.getElementById("toast");
   if (!el) {
