@@ -323,7 +323,7 @@
     <!-- Header -->
     <header>
         <div class="header-content">
-            <div class="logo">?ìö LessonBay</div>
+            <div class="logo">üìö LessonBay</div>
             <div class="header-actions">
                 <button class="btn btn-primary" id="refreshBtn">Refresh</button>
             </div>
@@ -482,7 +482,7 @@
             }).join('');
 
             activeCoursesCard.innerHTML = `
-                <h3 class="card-title">?ìñ Active Courses</h3>
+                <h3 class="card-title">üìñ Active Courses</h3>
                 <ul class="course-list">
                     ${courseListHTML}
                 </ul>
@@ -494,12 +494,12 @@
             const activityCard = document.getElementById('activityCard');
             const activitiesHTML = activities.map(activity => `
                 <div style="padding: 8px 0; border-bottom: 1px solid var(--border-color); font-size: 14px;">
-                    ??${activity}
+                    ‚úì ${activity}
                 </div>
             `).join('');
 
             activityCard.innerHTML = `
-                <h3 class="card-title">?éØ Recent Activity</h3>
+                <h3 class="card-title">üéØ Recent Activity</h3>
                 ${activitiesHTML}
             `;
         }
@@ -515,7 +515,7 @@
             const dashboard = document.getElementById('dashboardGrid');
             dashboard.innerHTML = `
                 <div class="card" style="grid-column: 1/-1; text-align: center; padding: 40px;">
-                    <div style="font-size: 48px; margin-bottom: 16px;">?†Ô∏è</div>
+                    <div style="font-size: 48px; margin-bottom: 16px;">‚ö†Ô∏è</div>
                     <h3 class="card-title">Oops! Something went wrong</h3>
                     <p class="card-content">${message}</p>
                     <button class="btn btn-primary" onclick="location.reload();" style="margin-top: 16px;">
