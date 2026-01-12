@@ -161,6 +161,48 @@ function readSupabaseSessionFromStorage(storage) {
   return null;
 }
 
+// Safe getUser that requires a valid token
+function getUser() {
+  if (userCache) return userCache;
+  try {
+    // 1. Check for token first. If no token, user is effectively guest.
+    // This prevents "Ghost User" state where localStorage has user data but no token.
+    const token = readSupabaseTokenFromStorage();
+    if (!token) {
+      // Clear any stale user data if token is gone
+      userCache = null;
+      return null;
+    }
+
+    // 2. Token exists, try to get user data from storage
+    const storageList = [
+      typeof localStorage !== "undefined" ? localStorage : null,
+      typeof sessionStorage !== "undefined" ? sessionStorage : null,
+    ];
+    for (const storage of storageList) {
+      if (!storage) continue;
+      const keys = [];
+      if (SUPABASE_PROJECT_REF) keys.push(`sb-${SUPABASE_PROJECT_REF}-auth-token`);
+      for (let i = 0; i < storage.length; i += 1) {
+        const k = storage.key(i);
+        if (k && k.startsWith("sb-") && k.endsWith("-auth-token") && !keys.includes(k)) {
+          keys.push(k);
+        }
+      }
+      for (const k of keys) {
+        const raw = storage.getItem(k);
+        if (!raw) continue;
+        const parsed = safeParse(raw, null);
+        if (!parsed) continue;
+        if (parsed.user) return parsed.user; // Some versions store user directly
+        // Fallback for different structures if needed, but standard is parsed.user
+        if (parsed.access_token && parsed.user) return parsed.user;
+      }
+    }
+  } catch (_) { }
+  return null;
+}
+
 function readSupabaseTokenFromStorage() {
   const session =
     readSupabaseSessionFromStorage(typeof localStorage !== "undefined" ? localStorage : null) ||
@@ -2238,7 +2280,7 @@ function handleUnauthorized() {
   // But strictly, apiGet calls this.
   // Let's rely on showToast(..., "warn") here, but suppress it in apiGet.
   showToast("세션이 만료되었습니다. 다시 로그인해 주세요.", "warn");
-  setTimeout(() => location.reload(), 1500); // Reload to clear stale UI state
+  setTimeout(() => location.reload(), 500); // Reload faster to clear stale UI state
 }
 
 // ? Supabase 로그아웃 포함
