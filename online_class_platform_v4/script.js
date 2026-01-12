@@ -52,8 +52,16 @@ ensureSupabaseClient();
 const _originalAlert = window.alert;
 window.alert = function (msg) {
   if (!msg) return;
-  const s = String(msg);
-  if (s.includes("세션이 만료되었습니다") || s.includes("Session expired") || s.includes("다시 로그인") || s.includes("인증 토큰이 없습니다") || s.includes("토큰이 유효하지 않습니다")) {
+  const s = String(msg).normalize('NFC');
+
+  // Aggressive suppression of session/auth related alerts
+  if (
+    s.includes("세션") && (s.includes("만료") || s.includes("종료")) ||
+    s.includes("로그인") && (s.includes("필요") || s.includes("해주세요") || s.includes("다시")) ||
+    s.includes("Session expired") ||
+    s.includes("인증 토큰") ||
+    s.includes("토큰이 유효하지")
+  ) {
     console.warn("Blocked alert:", s);
     return;
   }
@@ -281,9 +289,18 @@ let loadingTimer = null;
 
 function showToast(msg, type = "info", duration = 3000) {
   if (!msg) return;
-  // User requested to suppress session expired alerts
-  const s = String(msg);
-  if (s.includes("세션이 만료되었습니다") || s.includes("Session expired") || s.includes("다시 로그인") || s.includes("인증 토큰이 없습니다") || s.includes("토큰이 유효하지 않습니다")) return;
+  // Aggressive suppression of session/auth related alerts
+  const s = String(msg).normalize('NFC');
+  if (
+    s.includes("세션") && (s.includes("만료") || s.includes("종료")) ||
+    s.includes("로그인") && (s.includes("필요") || s.includes("해주세요") || s.includes("다시")) ||
+    s.includes("Session expired") ||
+    s.includes("인증 토큰") ||
+    s.includes("토큰이 유효하지")
+  ) {
+    console.warn("Suppressed toast:", s);
+    return;
+  }
 
   let el = document.getElementById("toast");
   if (!el) {
