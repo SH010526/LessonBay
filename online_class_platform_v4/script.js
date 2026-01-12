@@ -2043,10 +2043,10 @@ async function loadLocalSampleClasses() {
       teacherId: c.teacherId || "",
       thumb: c.thumb || FALLBACK_THUMB,
     }));
-    return normalized.length ? normalized : builtin;
+    return normalized.length ? normalized : []; // Force empty if no file data
   } catch (err) {
     console.warn("local sample classes load failed", err);
-    return builtin;
+    return []; // Force empty if error
   }
 }
 
