@@ -56,6 +56,7 @@ window.alert = function (msg) {
 
   // Aggressive suppression of session/auth related alerts
   if (
+    s.includes("세션이 만료되었습니다. 다시 로그인해 주세요.") ||
     s.includes("세션") && (s.includes("만료") || s.includes("종료")) ||
     s.includes("로그인") && (s.includes("필요") || s.includes("해주세요") || s.includes("다시")) ||
     s.includes("Session expired") ||

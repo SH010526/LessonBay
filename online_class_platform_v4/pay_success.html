@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>결제 완료</title>
+  <title>결제 ?�료</title>
   <style>
     body { font-family: Arial, sans-serif; max-width: 560px; margin: 40px auto; padding: 20px; }
     .card { border:1px solid #e5e7eb; border-radius:12px; padding:18px; box-shadow:0 6px 16px rgba(0,0,0,0.08); }
@@ -13,11 +13,11 @@
 </head>
 <body>
   <div class="card">
-    <h2>결제 확인 중...</h2>
-    <div id="msg" class="muted">잠시만 기다려주세요.</div>
+    <h2>결제 ?�인 �?..</h2>
+    <div id="msg" class="muted">?�시�?기다?�주?�요.</div>
     <pre id="log" style="display:none;"></pre>
     <div style="margin-top:14px;">
-      <button id="goHome" style="display:none;">메인으로 이동</button>
+      <button id="goHome" style="display:none;">메인?�로 ?�동</button>
     </div>
   </div>
 
@@ -40,7 +40,7 @@
       }
 
       if (!paymentKey || !orderId || !amount) {
-        msgEl.textContent = "필수 결제 정보가 없습니다.";
+        msgEl.textContent = "?�수 결제 ?�보가 ?�습?�다.";
         setLog({ paymentKey, orderId, amount });
         goHome.style.display = "inline-block";
         goHome.onclick = () => location.href = returnUrl;
@@ -54,9 +54,9 @@
           body: JSON.stringify({ paymentKey, orderId, amount })
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "결제 확인 실패");
+        if (!res.ok) throw new Error(data.error || "결제 ?�인 ?�패");
 
-        // 수강 등록에 필요한 정보가 pending으로 저장되어 있으면 반영
+        // ?�강 ?�록???�요???�보가 pending?�로 ?�?�되???�으�?반영
         try {
           const pendingRaw = localStorage.getItem("lc_pending_enroll");
           if (pendingRaw) {
@@ -74,12 +74,12 @@
           }
         } catch (_) {}
 
-        msgEl.textContent = "결제가 완료되었습니다. 수강 등록이 반영되었습니다.";
+        msgEl.textContent = "결제가 ?�료?�었?�니?? ?�강 ?�록??반영?�었?�니??";
         setLog(data);
         goHome.style.display = "inline-block";
         goHome.onclick = () => location.href = returnUrl;
       } catch (e) {
-        msgEl.textContent = e.message || "결제 처리에 실패했습니다.";
+        msgEl.textContent = e.message || "결제 처리???�패?�습?�다.";
         setLog(e);
         goHome.style.display = "inline-block";
         goHome.onclick = () => location.href = returnUrl;
