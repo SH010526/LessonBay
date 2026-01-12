@@ -40,6 +40,7 @@
             <div class="muted2" style="font-size:12px; font-weight:950;">라이브 준비</div>
           </div>
           <div class="panelBody">
+            <!-- Pre-join Screen -->
             <div id="preJoinView"
               style="display:none; text-align:center; padding:20px; border-bottom:1px solid rgba(15,23,42,.10);">
               <div style="font-size:18px; font-weight:1000; margin-bottom:14px;">수업 입장 전 카메라/마이크 확인</div>
@@ -58,6 +59,7 @@
               <div class="muted" style="margin-top:12px; font-size:13px;">카메라와 마이크 권한을 허용해주세요.</div>
             </div>
 
+            <!-- Live Room Screen -->
             <div id="liveRoomView" style="display:none;">
               <div class="videoFrame" id="videoFrame">
                 <video id="liveVideo" class="liveVideo" autoplay playsinline muted></video>
@@ -76,7 +78,6 @@
               </div>
 
               <div class="controlsRow">
-                <!-- btnConnect 제거 (pre-join으로 대체) -->
                 <button class="btn" id="btnLocalCam">카메라 끄기</button>
                 <button class="btn" id="btnLocalMic">마이크 끄기</button>
                 <button class="btn" id="btnShare">화면 공유</button>

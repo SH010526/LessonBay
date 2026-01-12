@@ -96,22 +96,20 @@ function handleSignupPage() {
         if (!pending) return;
         try {
           if (resendTimer) clearInterval(resendTimer);
-          // Prevent double click during async
           resendBtn.disabled = true;
-
           setBtnLoading(resendBtn, true, "재전송 중...");
+
           await supabaseSignupWithEmailConfirm(pending.name, pending.email, pending.pw, pending.role);
+
           if (statusEl) statusEl.textContent = "인증코드를 재전송했습니다. 메일을 확인하세요.";
 
-          // Start cooldown only on success
-          setBtnLoading(resendBtn, false); // restore text first or let cooldown override
+          // Cooldown success
+          setBtnLoading(resendBtn, false);
           startResendCooldown(60);
 
         } catch (e) {
           if (statusEl) statusEl.textContent = e?.message || "재전송 실패";
-          setBtnLoading(resendBtn, false); // Restore original state on error
-        } finally {
-          // loading helper handles text restoration, but we need to ensure cooldown logic takes over if successful
+          setBtnLoading(resendBtn, false);
         }
       });
 
