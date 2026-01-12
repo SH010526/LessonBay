@@ -2072,8 +2072,8 @@ async function ensureSeedData() {
     if (legacyClasses.length) {
       setClasses(legacyClasses);
     } else {
-      const builtin = getBuiltinClasses();
-      if (builtin.length) setClasses(builtin);
+      // const builtin = getBuiltinClasses();
+      // if (builtin.length) setClasses(builtin);
       scheduleIdleTask(async () => {
         try {
           const local = await loadLocalSampleClasses();

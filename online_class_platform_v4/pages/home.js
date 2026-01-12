@@ -3,8 +3,15 @@ function loadHomePopular() {
   if (!wrap) return;
 
   const classes = getClasses();
-  const top = classes.slice(0, 6);
-  if (!top.length) return;
+  // Filter out demo classes if any remain
+  const realClasses = classes.filter(c => !c.id.startsWith("c_demo_"));
+
+  if (!realClasses.length) {
+    wrap.innerHTML = `<div class="muted" style="padding:20px 0;">불러오는 중...</div>`;
+    return;
+  }
+
+  const top = realClasses.slice(0, 6);
 
   wrap.innerHTML = top.map(c => renderClassCard(c)).join("");
   wrap.dataset.hydrated = "1";
