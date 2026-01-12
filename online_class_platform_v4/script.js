@@ -2324,9 +2324,6 @@ function handleUnauthorized(silent = false) {
   clearSupabaseSessions();
   clearOldAuthKeys();
   updateNav();
-  // If silent (e.g. background check), do NOT show toast
-  // User requested to remove this alert completely.
-
   setTimeout(() => location.reload(), 500); // Reload faster to clear stale UI state
 }
 
