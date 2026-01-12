@@ -380,8 +380,12 @@ async function apiGet(path, opts = {}) {
       ...fetchOptions,
     }, timeoutMs);
     if (!res.ok) {
-      if (res.status === 401) handleUnauthorized();
       const txt = await res.text();
+      if (res.status === 401) {
+        handleUnauthorized();
+        // 401인 경우 handleUnauthorized()에서 토스트를 띄우거나, 중복 방지를 위해 여기선 생략
+        throw new Error(txt || "Unauthorized");
+      }
       if (!silent) showToast(txt || "요청 실패", "danger");
       throw new Error(txt);
     }
@@ -2206,13 +2210,33 @@ function clearSupabaseSessions() {
   clearSupabaseSessionStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
 }
 
+function clearDataCache() {
+  dataCache.classes = [];
+  dataCache.enrollments = {};
+  dataCache.replays = {};
+  dataCache.chat = {};
+  dataCache.materials = {};
+  dataCache.assignments = {};
+  dataCache.reviews = {};
+  dataCache.qna = {};
+  dataCache.attendance = {};
+  dataCache.progress = {};
+  enrollFetchKey = "";
+  enrollFetchPromise = null;
+}
+
 function handleUnauthorized() {
   if (__authInvalidated) return;
   __authInvalidated = true;
   setUser(null);
+  clearDataCache(); // Fix leak
   clearSupabaseSessions();
   clearOldAuthKeys();
   updateNav();
+  // Toast is handled by apiGet now, or we show it here?
+  // If apiGet suppresses it, we should show it here ONCE.
+  // But strictly, apiGet calls this.
+  // Let's rely on showToast(..., "warn") here, but suppress it in apiGet.
   showToast("세션이 만료되었습니다. 다시 로그인해 주세요.", "warn");
 }
 
@@ -2226,6 +2250,7 @@ async function doLogout(goHome = true) {
 
   clearSupabaseSessions();
   setUser(null);
+  clearDataCache(); // Fix leak
   clearOldAuthKeys();
   if (goHome) navigateTo("index.html", { replace: true });
 }

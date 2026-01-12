@@ -288,6 +288,7 @@ async function loadClassDetailPage() {
   }
   async function fetchAssignmentsData() {
     if (!isDetailPageActive()) return;
+    if (!getUser()) return; // GUEST: Do not fetch assignments (protected)
     if (detailLoadCache.assigns) return;
     detailLoadCache.assigns = true;
     try {
