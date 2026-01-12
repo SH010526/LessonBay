@@ -161,20 +161,43 @@ function readSupabaseSessionFromStorage(storage) {
   return null;
 }
 
+function readSupabaseTokenFromStorage() {
+  const session =
+    readSupabaseSessionFromStorage(typeof localStorage !== "undefined" ? localStorage : null) ||
+    readSupabaseSessionFromStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
+  return session?.access_token || "";
+}
+
+// Helper to check JWT expiry
+function isTokenExpired(token) {
+  if (!token) return true;
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    if (!payload.exp) return false;
+    // Give 10s buffer
+    const now = Math.floor(Date.now() / 1000);
+    return payload.exp < (now + 10);
+  } catch (_) {
+    return true; // Invalid token is "expired"
+  }
+}
+
 // Safe getUser that requires a valid token
 function getUser() {
   if (userCache) return userCache;
   try {
     // 1. Check for token first. If no token, user is effectively guest.
-    // This prevents "Ghost User" state where localStorage has user data but no token.
     const token = readSupabaseTokenFromStorage();
-    if (!token) {
-      // Clear any stale user data if token is gone
+    if (!token || isTokenExpired(token)) {
+      // Clear any stale user data if token is gone or expired
+      // But wait, if we aggressively clear here, we might kill a refreshable session?
+      // Supabase auto-refreshes. BUT synchronous getUser cannot wait for refresh.
+      // It is safer to show GUEST UI than Broken Member UI.
       userCache = null;
       return null;
     }
 
-    // 2. Token exists, try to get user data from storage
+    // 2. Token exists and valid, try to get user data from storage
     const storageList = [
       typeof localStorage !== "undefined" ? localStorage : null,
       typeof sessionStorage !== "undefined" ? sessionStorage : null,
