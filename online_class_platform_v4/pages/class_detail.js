@@ -741,7 +741,11 @@ async function loadClassDetailPage() {
     const isOwnerTeacher = isOwnerTeacherForClass(user, c);
     const myEmail = normalizeEmail(user?.email || "");
     const submissions = Array.isArray(meta?.submissions) ? meta.submissions : [];
-    const myAssign = submissions.find(a => normalizeEmail(a.userEmail || a.studentEmail || "") === myEmail || a.studentId === user?.id) || null;
+    // SECURITY FIX: Ensure user exists and has email before finding submission.
+    // Guests (user=null) should never match any submission, even one with missing email.
+    const myAssign = (user && myEmail)
+      ? submissions.find(a => normalizeEmail(a.userEmail || a.studentEmail || "") === myEmail || a.studentId === user.id)
+      : null;
     const formWrap = document.getElementById("assignFormWrap");
     const textEl = document.getElementById("assignText");
     const fileEl = document.getElementById("assignFile");
@@ -836,18 +840,27 @@ async function loadClassDetailPage() {
       const statusEl = document.getElementById("assignStatus");
       if (statusEl) statusEl.style.display = "none";
     } else {
-      // 학생: 선택된 과제 기준으로만 편집 버튼/입력 노출 결정
-      const hasSubmission = !!myAssign;
-      if (hasSubmission) {
-        if (isEditingStudent) {
-          toggleStudentFields(true);
-        } else {
-          if (formWrap) formWrap.dataset.editing = "0";
-          toggleStudentFields(false);
-        }
+      // 학생/게스트 로직
+      if (!user) {
+        // 게스트: 폼 숨기고 로그인 유도 메시지 표시
+        toggleStudentFields(false);
+        if (formWrap) formWrap.style.display = "none";
+        // 상태 메시지는 아래에서 처리
       } else {
-        if (formWrap) formWrap.dataset.editing = "1";
-        toggleStudentFields(true);
+        // 로그인한 학생: 선택된 과제 기준으로 편집/제출 UI 노출
+        const hasSubmission = !!myAssign;
+        if (hasSubmission) {
+          if (isEditingStudent) {
+            toggleStudentFields(true);
+          } else {
+            if (formWrap) formWrap.dataset.editing = "0";
+            toggleStudentFields(false);
+          }
+        } else {
+          // 미제출 상태면 작성 폼 노출
+          if (formWrap) formWrap.dataset.editing = "1";
+          toggleStudentFields(true);
+        }
       }
     }
 
@@ -866,7 +879,9 @@ async function loadClassDetailPage() {
       if (wrap) wrap.insertBefore(statusEl, document.getElementById("assignFormWrap"));
     }
     if (statusEl) {
-      if (!assignList.length) {
+      if (!user) {
+        statusEl.innerHTML = `<span class="muted">과제를 제출하거나 확인하려면 <a href="#" onclick="window.AuthModal?.open(); return false;" style="text-decoration:underline;">로그인</a>이 필요합니다.</span>`;
+      } else if (!assignList.length) {
         statusEl.textContent = "등록된 과제가 없습니다.";
       } else {
         const dueTxt = meta?.dueAt ? `마감: ${new Date(meta.dueAt).toLocaleString("ko-KR")}` : "마감 설정 없음";
