@@ -31,25 +31,23 @@ function loadHomePopular() {
           card.addEventListener("click", () => goClassDetail(card.getAttribute("data-id")));
         });
         hydrateThumbs(wrap);
-      }
       })
-      .catch (() => {
-    wrap.innerHTML = `<div class="muted" style="padding:20px 0;">수업을 불러오지 못했습니다.</div>`;
+      .catch(() => {
+        wrap.innerHTML = `<div class="muted" style="padding:20px 0;">수업을 불러오지 못했습니다.</div>`;
+      });
+    return;
+  }
+
+  const top = realClasses.slice(0, 6);
+  wrap.innerHTML = top.map(c => renderClassCard(c)).join("");
+  wrap.dataset.hydrated = "1";
+
+  $$(".class-card", wrap).forEach(card => {
+    card.addEventListener("click", () => {
+      const id = card.getAttribute("data-id");
+      goClassDetail(id);
+    });
   });
-  return;
-}
 
-const top = realClasses.slice(0, 6);
-
-wrap.innerHTML = top.map(c => renderClassCard(c)).join("");
-wrap.dataset.hydrated = "1";
-
-$$(".class-card", wrap).forEach(card => {
-  card.addEventListener("click", () => {
-    const id = card.getAttribute("data-id");
-    goClassDetail(id);
-  });
-});
-
-hydrateThumbs(wrap);
+  hydrateThumbs(wrap);
 }

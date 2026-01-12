@@ -267,6 +267,9 @@ let loadingTimer = null;
 
 function showToast(msg, type = "info", duration = 3000) {
   if (!msg) return;
+  // User requested to suppress session expired alerts
+  if (msg.includes("세션이 만료되었습니다") || msg.includes("Session expired")) return;
+
   let el = document.getElementById("toast");
   if (!el) {
     el = document.createElement("div");
