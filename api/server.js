@@ -406,6 +406,8 @@ const SMTP_CONFIG = {
     user: process.env.SMTP_USER || "",
     pass: process.env.SMTP_PASS || "",
   },
+  connectionTimeout: 5000, // 5 seconds
+  socketTimeout: 5000,     // 5 seconds
 };
 
 // Helpers

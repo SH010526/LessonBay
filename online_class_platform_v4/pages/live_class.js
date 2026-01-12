@@ -394,7 +394,7 @@ async function loadLivePage() {
 
   function setConnectedUI(isOn) {
     connected = isOn;
-    if (btnConnect) btnConnect.textContent = connected ? "연결 해제" : "카메라/마이크 연결";
+    // if (btnConnect) btnConnect.textContent = connected ? "연결 해제" : "카메라/마이크 연결"; // Removed: btnConnect no longer exists
     if (!connected) {
       if (liveVideo) {
         if (liveVideo.srcObject) liveVideo.srcObject = null;
