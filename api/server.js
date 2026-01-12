@@ -211,7 +211,7 @@ function parseSupabaseStorageRef(value) {
       const m = u.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
       if (!m) return null;
       let path = m[2];
-      try { path = decodeURIComponent(path); } catch (_) {}
+      try { path = decodeURIComponent(path); } catch (_) { }
       return { bucket: m[1], path };
     } catch (_) {
       return null;
@@ -268,7 +268,7 @@ let keepWarmTimer = null;
 function startKeepWarm() {
   if (!KEEP_WARM_URL || keepWarmTimer) return;
   if (typeof fetch !== "function") return;
-  const ping = () => fetch(KEEP_WARM_URL, { cache: "no-store" }).catch(() => {});
+  const ping = () => fetch(KEEP_WARM_URL, { cache: "no-store" }).catch(() => { });
   ping();
   keepWarmTimer = setInterval(() => {
     ping();
@@ -577,8 +577,8 @@ function estimateBase64Bytes(str) {
 function logError(err, req) {
   try {
     const line = `[${new Date().toISOString()}] ${req?.method || ""} ${req?.originalUrl || ""} :: ${err?.stack || err}\n`;
-    fs.appendFile(path.join(logDir, "error.log"), line, () => {});
-  } catch (_) {}
+    fs.appendFile(path.join(logDir, "error.log"), line, () => { });
+  } catch (_) { }
 }
 
 // RLS가 켜져 있으면 삽입이 막히므로 비활성화 (Supabase 테이블)
@@ -870,8 +870,7 @@ app.get("/api/classes", async (req, res) => {
 
     cacheSet(cacheKey, list, CLASS_LIST_CACHE_TTL_MS);
     res.json(list);
-  } catch (err)
-  {
+  } catch (err) {
     console.error(err);
     res.status(500).json({ error: "수업 목록 조회 실패" });
   }
@@ -1004,7 +1003,7 @@ app.post("/api/classes/:id/enroll", requireAuth, requireStudent, async (req, res
     const endAt = calcEndAt(planType, duration);
 
     const cls = await prisma.class.findUnique({ where: { id: classId } });
-    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
+    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
 
     const enrollment = await prisma.enrollment.upsert({
       where: { userId_classId: { userId: req.user.id, classId } },
@@ -1023,7 +1022,7 @@ app.post("/api/classes/:id/enroll", requireAuth, requireStudent, async (req, res
     res.status(201).json(enrollment);
   } catch (err) {
     console.error("Enroll error:", err);
-    res.status(500).json({ error: "????? ????? ?????", detail: err?.message || String(err) });
+    res.status(500).json({ error: "수강 신청 실패", detail: err?.message || String(err) });
   }
 });
 
@@ -1045,7 +1044,7 @@ app.get("/api/me/enrollments", requireAuth, async (req, res) => {
     res.json(list);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "????? ?????? ?????? ?????" });
+    res.status(500).json({ error: "수강 목록 조회 실패" });
   }
 });
 
@@ -1064,14 +1063,14 @@ app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
     }
 
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
+    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
 
     if (req.user.id !== cls.teacherId) {
       const enroll = await prisma.enrollment.findUnique({
         where: { userId_classId: { userId: req.user.id, classId } },
       });
       if (!enrollmentIsActive(enroll)) {
-        return res.status(403).json({ error: "????? ?????? ?????????????????????????????????????." });
+        return res.status(403).json({ error: "수강 중인 학생만 다시보기를 볼 수 있습니다." });
       }
     }
 
@@ -1096,7 +1095,7 @@ app.get("/api/classes/:id/replays", requireAuth, async (req, res) => {
     res.json(list);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "??????????? ?????? ?????" });
+    res.status(500).json({ error: "다시보기 목록 조회 실패" });
   }
 });
 
@@ -1104,11 +1103,11 @@ app.post("/api/classes/:id/replays", requireAuth, requireTeacher, async (req, re
   try {
     const classId = req.params.id;
     const { vodUrl, mime, title, sessionId } = req.body;
-    if (!vodUrl) return res.status(400).json({ error: "vodUrl??????????????" });
+    if (!vodUrl) return res.status(400).json({ error: "vodUrl이 필요합니다." });
 
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
-    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "?????? ?????????????????? ?????????????." });
+    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
+    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업에만 다시보기를 등록할 수 있습니다." });
 
     const replay = await prisma.replay.create({
       data: { classId, sessionId: sessionId || null, vodUrl, mime: mime || null, title: title || null },
@@ -1122,7 +1121,7 @@ app.post("/api/classes/:id/replays", requireAuth, requireTeacher, async (req, re
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "??????????? ????? ?????" });
+    res.status(500).json({ error: "다시보기 등록 실패" });
   }
 });
 
@@ -1130,10 +1129,10 @@ app.get("/api/replays/:id", requireAuth, async (req, res) => {
   try {
     const replayId = req.params.id;
     const replay = await prisma.replay.findUnique({ where: { id: replayId } });
-    if (!replay) return res.status(404).json({ error: "???????????????????? ????????????." });
+    if (!replay) return res.status(404).json({ error: "다시보기를 찾을 수 없습니다." });
 
     const cls = await prisma.class.findUnique({ where: { id: replay.classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
+    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
 
     const isTeacher = req.user?.role === "teacher" && req.user?.id === cls.teacherId;
     if (!isTeacher) {
@@ -1141,21 +1140,21 @@ app.get("/api/replays/:id", requireAuth, async (req, res) => {
         where: { userId_classId: { userId: req.user.id, classId: replay.classId } },
       });
       if (!enrollmentIsActive(enroll)) {
-        return res.status(403).json({ error: "????? ?????? ?????????????????????????????????????." });
+        return res.status(403).json({ error: "수강 중인 학생만 다시보기를 볼 수 있습니다." });
       }
     }
 
     res.json({ ...replay, hasVod: !!replay.vodUrl });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "??????????? ?????? ?????" });
+    res.status(500).json({ error: "다시보기 조회 실패" });
   }
 });
 
 // ---------- Common helper for class access ----------
 async function ensureClassAccess(req, classId) {
   const cls = await prisma.class.findUnique({ where: { id: classId } });
-  if (!cls) return { error: "????????????? ????????????.", cls: null, isTeacher: false, isActiveStudent: false };
+  if (!cls) return { error: "수업을 찾을 수 없습니다.", cls: null, isTeacher: false, isActiveStudent: false };
   const isTeacher = req.user?.role === "teacher" && req.user?.id === cls.teacherId;
   let isActiveStudent = false;
   if (!isTeacher) {
@@ -1174,7 +1173,7 @@ app.get("/api/classes/:id/materials", requireAuth, async (req, res) => {
     const access = await ensureClassAccess(req, classId);
     if (access.error) return res.status(404).json({ error: access.error });
     if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "????? ?????? ???????????????????????????????." });
+      return res.status(403).json({ error: "수강 중인 학생만 자료를 볼 수 있습니다." });
     }
 
     const list = await prisma.material.findMany({
@@ -1184,7 +1183,7 @@ app.get("/api/classes/:id/materials", requireAuth, async (req, res) => {
     res.json(list);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "????? ?????? ?????" });
+    res.status(500).json({ error: "자료 목록 조회 실패" });
   }
 });
 
@@ -1192,11 +1191,11 @@ app.post("/api/classes/:id/materials", requireAuth, requireTeacher, async (req, 
   try {
     const classId = req.params.id;
     const { title, fileUrl, mime } = req.body;
-    if (!title || !fileUrl) return res.status(400).json({ error: "title???fileUrl??????????????" });
+    if (!title || !fileUrl) return res.status(400).json({ error: "title과 fileUrl이 필요합니다." });
 
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
-    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "?????? ?????????? ????????????????????." });
+    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
+    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업에만 자료를 업로드할 수 있습니다." });
 
     const m = await prisma.material.create({
       data: {
@@ -1210,7 +1209,7 @@ app.post("/api/classes/:id/materials", requireAuth, requireTeacher, async (req, 
     res.status(201).json(m);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "????? ????????????" });
+    res.status(500).json({ error: "자료 업로드 실패" });
   }
 });
 
@@ -1353,11 +1352,11 @@ app.post("/api/classes/:id/assignments", requireAuth, requireTeacher, async (req
   try {
     const classId = req.params.id;
     const { title, description, dueAt } = req.body;
-    if (!title) return res.status(400).json({ error: "title??????????????" });
+    if (!title) return res.status(400).json({ error: "title이 필요합니다." });
 
     const cls = await prisma.class.findUnique({ where: { id: classId }, select: { teacherId: true } });
-    if (!cls) return res.status(404).json({ error: "????????????? ????????????." });
-    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "?????? ?????????? ????? ?????????????." });
+    if (!cls) return res.status(404).json({ error: "수업을 찾을 수 없습니다." });
+    if (cls.teacherId !== req.user.id) return res.status(403).json({ error: "본인 수업에만 과제를 등록할 수 있습니다." });
 
     const a = await prisma.assignment.create({
       data: {
@@ -1371,7 +1370,7 @@ app.post("/api/classes/:id/assignments", requireAuth, requireTeacher, async (req
     res.status(201).json(a);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "?????? ????? ?????" });
+    res.status(500).json({ error: "과제 등록 실패" });
   }
 });
 
@@ -1784,7 +1783,7 @@ app.get("/api/classes/:id/chat", requireAuth, async (req, res) => {
     const access = await ensureClassAccess(req, classId);
     if (access.error) return res.status(404).json({ error: access.error });
     if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "?? ?? ??? ??? ? ? ????." });
+      return res.status(403).json({ error: "수강 중인 학생만 채팅을 볼 수 있습니다." });
     }
 
     const listRaw = await prisma.chatMessage.findMany({
@@ -1802,7 +1801,7 @@ app.get("/api/classes/:id/chat", requireAuth, async (req, res) => {
     res.json(list);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "?? ?? ??" });
+    res.status(500).json({ error: "채팅 조회 실패" });
   }
 });
 
@@ -1810,12 +1809,12 @@ app.post("/api/classes/:id/chat", requireAuth, async (req, res) => {
   try {
     const classId = req.params.id;
     const { message } = req.body || {};
-    if (!message) return res.status(400).json({ error: "message? ?????." });
+    if (!message) return res.status(400).json({ error: "message가 필요합니다." });
 
     const access = await ensureClassAccess(req, classId);
     if (access.error) return res.status(404).json({ error: access.error });
     if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "?? ?? ??? ??? ?? ? ????." });
+      return res.status(403).json({ error: "수강 중인 학생만 채팅을 보낼 수 있습니다." });
     }
 
     const m = await prisma.chatMessage.create({
@@ -1831,7 +1830,7 @@ app.post("/api/classes/:id/chat", requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "?? ?? ??" });
+    res.status(500).json({ error: "채팅 전송 실패" });
   }
 });
 
@@ -1842,7 +1841,7 @@ app.get("/api/classes/:id/attendance", requireAuth, async (req, res) => {
     const access = await ensureClassAccess(req, classId);
     if (access.error) return res.status(404).json({ error: access.error });
     if (!access.isTeacher && !access.isActiveStudent) {
-      return res.status(403).json({ error: "?? ?? ??? ??? ? ? ????." });
+      return res.status(403).json({ error: "수강 중인 학생만 출석 현황을 볼 수 있습니다." });
     }
 
     const list = await prisma.attendance.findMany({
@@ -1853,7 +1852,7 @@ app.get("/api/classes/:id/attendance", requireAuth, async (req, res) => {
     res.json(filtered);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "?? ?? ??" });
+    res.status(500).json({ error: "출석 조회 실패" });
   }
 });
 
@@ -1862,7 +1861,7 @@ app.post("/api/classes/:id/attendance", requireAuth, requireStudent, async (req,
     const classId = req.params.id;
     const access = await ensureClassAccess(req, classId);
     if (access.error) return res.status(404).json({ error: access.error });
-    if (!access.isActiveStudent) return res.status(403).json({ error: "?? ?? ??? ??? ??? ? ????." });
+    if (!access.isActiveStudent) return res.status(403).json({ error: "수강 중인 학생만 출석 체크할 수 있습니다." });
 
     const a = await prisma.attendance.create({
       data: { classId, userId: req.user.id },
@@ -1870,7 +1869,7 @@ app.post("/api/classes/:id/attendance", requireAuth, requireStudent, async (req,
     res.status(201).json(a);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "?? ?? ??" });
+    res.status(500).json({ error: "출석 체크 실패" });
   }
 });
 

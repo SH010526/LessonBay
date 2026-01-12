@@ -59,6 +59,8 @@ window.alert = function (msg) {
     s.includes("세션") && (s.includes("만료") || s.includes("종료")) ||
     s.includes("로그인") && (s.includes("필요") || s.includes("해주세요") || s.includes("다시")) ||
     s.includes("Session expired") ||
+    s.includes("JWT expired") ||
+    s.includes("token") ||
     s.includes("인증 토큰") ||
     s.includes("토큰이 유효하지")
   ) {
@@ -66,6 +68,23 @@ window.alert = function (msg) {
     return;
   }
   _originalAlert(msg);
+};
+
+// Also suppress confirm dialogs if they are session related
+const _originalConfirm = window.confirm;
+window.confirm = function (msg) {
+  if (!msg) return false;
+  const s = String(msg).normalize('NFC');
+  if (
+    s.includes("세션") && (s.includes("만료") || s.includes("종료")) ||
+    s.includes("로그인") && (s.includes("필요") || s.includes("해주세요") || s.includes("다시")) ||
+    s.includes("Session expired") ||
+    s.includes("JWT expired")
+  ) {
+    console.warn("Blocked confirm:", s);
+    return true; // Auto-confirm to proceed with reload usually
+  }
+  return _originalConfirm(msg);
 };
 
 function loadSupabaseSdkOnce() {
