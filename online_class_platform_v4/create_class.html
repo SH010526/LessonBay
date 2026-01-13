@@ -1,5 +1,6 @@
 ﻿<!DOCTYPE html>
 <html lang="ko">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -13,6 +14,7 @@
   <script src="script.js" defer></script>
   <script src="pages/create_class.js" defer></script>
 </head>
+
 <body>
   <nav>
     <div class="container nav-inner">
@@ -56,8 +58,14 @@
                 <option value="__custom__">직접 입력</option>
               </select>
 
-              <input id="cCategoryCustom" class="input" placeholder="카테고리 직접 입력" style="margin-top:10px; display:none;" />
+              <input id="cCategoryCustom" class="input" placeholder="카테고리 직접 입력"
+                style="margin-top:10px; display:none;" />
               <input id="cCategory" class="input" style="display:none;" />
+
+              <div class="field" style="margin-top:12px;">
+                <label>수업 시작 일시</label>
+                <input id="cDate" type="datetime-local" class="input" />
+              </div>
             </div>
 
             <div>
@@ -65,7 +73,7 @@
               <input id="cThumbFile" class="input" type="file" accept="image/*" />
               <input id="cThumbData" type="hidden" />
               <img id="cThumbPreview" alt="미리보기"
-                   style="margin-top:10px; width:100%; max-height:200px; object-fit:contain; background:#f8f8f8; border-radius:16px; border:1px solid rgba(15,23,42,.10); display:none;" />
+                style="margin-top:10px; width:100%; max-height:200px; object-fit:contain; background:#f8f8f8; border-radius:16px; border:1px solid rgba(15,23,42,.10); display:none;" />
             </div>
           </div>
 
@@ -95,4 +103,5 @@
 
   <div class="footer">© 2025 LessonBay. All rights reserved.</div>
 </body>
+
 </html>

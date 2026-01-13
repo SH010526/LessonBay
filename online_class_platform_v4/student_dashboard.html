@@ -218,13 +218,16 @@
             try {
                 if (typeof waitForSupabaseClient === 'function') {
                     await waitForSupabaseClient();
-                } else if (!window.supabaseClient && window.supabase) {
+                }
+
+                // Ensure we have a valid client instance
+                if (!window.supabaseClient && window.supabase && window.supabase.createClient) {
                     const SUPABASE_URL = "https://pqvdexhxytahljultmjd.supabase.co";
                     const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxdmRleGh4eXRhaGxqdWx0bWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5NjMzNTMsImV4cCI6MjA4MTUzOTM1M30.WzJWY3-92Bwkic-Wb2rOmZ1joEUj-s69cSL2hPT79fQ";
                     window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
                 }
 
-                const client = window.supabaseClient || (window.supabase ? window.supabase : null);
+                const client = window.supabaseClient;
                 if (!client) throw new Error("Supabase Client not found");
 
                 const { data: { session } } = await client.auth.getSession();
