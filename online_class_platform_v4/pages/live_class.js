@@ -65,68 +65,67 @@ async function loadLivePage() {
     const LK_VERSION = "2.16.1";
 
     const resolveLK = () => {
-      // UMD 전역 이름을 모두 확인하고, 없으면 별칭을 설정
       let candidate = window.LiveKit || window.LivekitClient || window.livekitClient || window.livekit;
 
-      // UMD 번들에서 default로 감싸진 경우를 처리
+      // Handle UMD default export wrapper
       if (candidate && candidate.default && (candidate.default.connect || candidate.default.Room)) {
         candidate = candidate.default;
       }
 
-      if (!window.LiveKit && candidate) window.LiveKit = candidate;
-      if (!window.LivekitClient && candidate) window.LivekitClient = candidate;
-
-      const lk = candidate || window.LiveKit || window.LivekitClient || window.livekitClient || window.livekit;
-      if (lk && (lk.connect || lk.Room)) {
-        window.LiveKit = window.LiveKit || lk;
-        window.LivekitClient = window.LivekitClient || lk;
+      // Set globals if found
+      if (candidate) {
+        if (!window.LiveKit) window.LiveKit = candidate;
+        if (!window.LivekitClient) window.LivekitClient = candidate;
       }
-      return lk;
+
+      // Final check
+      const finalClient = candidate || window.LiveKit || window.LivekitClient || window.livekitClient || window.livekit;
+      if (finalClient && (finalClient.connect || finalClient.Room)) {
+        return finalClient;
+      }
+      return null;
     };
 
-    let LK = resolveLK();
-    if (LK && LK.connect) return LK;
+    let client = resolveLK();
+    if (client) return client;
 
-    // 로컬 번들 강제 로드 (Live Server에서 404/304 캐싱될 때를 대비)
+    // 1) Force load local UMD
     await new Promise((resolve) => {
       const script = document.createElement("script");
-    script.src = "vendor/livekit-client.umd.js?v=" + Date.now();
-    script.crossOrigin = "anonymous";
-    script.onload = resolve;
-    script.onerror = resolve;
-    document.head.appendChild(script);
-  });
-  LK = resolveLK();
-  if (LK && LK.connect) return LK;
+      script.src = "vendor/livekit-client.umd.js?v=" + Date.now();
+      script.crossOrigin = "anonymous";
+      script.onload = resolve;
+      script.onerror = resolve;
+      document.head.appendChild(script);
+    });
+    client = resolveLK();
+    if (client) return client;
 
-  // 최종 CDN fallback
-  // 1) UMD
-  await new Promise((resolve) => {
-    const script = document.createElement("script");
-    script.src = `https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.umd.min.js`;
-    script.crossOrigin = "anonymous";
-    script.onload = resolve;
-    script.onerror = resolve;
-    document.head.appendChild(script);
-  });
-  LK = resolveLK();
-  if (LK && LK.connect) return LK;
+    // 2) CDN UMD
+    await new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = `https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.umd.min.js`;
+      script.crossOrigin = "anonymous";
+      script.onload = resolve;
+      script.onerror = resolve;
+      document.head.appendChild(script);
+    });
+    client = resolveLK();
+    if (client) return client;
 
-  // 2) ESM 동적 import (jsdelivr, 명시 버전)
-  try {
-    const mod = await import(`https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.esm.mjs`);
-    LK = mod?.default || mod;
-    if (LK && (LK.connect || LK.Room)) {
-      window.LiveKit = window.LiveKit || LK;
-      window.LivekitClient = window.LivekitClient || LK;
-      return LK;
-    }
-  } catch (_) {
-    // ignore
+    // 3) ESM dynamic import
+    try {
+      const mod = await import(`https://cdn.jsdelivr.net/npm/livekit-client@${LK_VERSION}/dist/livekit-client.esm.mjs`);
+      client = mod?.default || mod;
+      if (client && (client.connect || client.Room)) {
+        window.LiveKit = window.LiveKit || client;
+        window.LivekitClient = window.LivekitClient || client;
+        return client;
+      }
+    } catch (_) { /* ignore */ }
+
+    return client;
   }
-
-  return LK;
-}
 
   const LK = await ensureLiveKitClient();
   if (!LK || !(LK.connect || LK.Room)) {
@@ -134,10 +133,17 @@ async function loadLivePage() {
     return;
   }
 
+  const preJoinView = $("#preJoinView");
+  const liveRoomView = $("#liveRoomView");
+  const previewVideo = $("#previewVideo");
+  const previewCamBtn = $("#previewCamBtn");
+  const previewMicBtn = $("#previewMicBtn");
+  const btnJoinRoom = $("#btnJoinRoom");
+
   const videoFrame = $("#videoFrame");
   const liveVideo = $("#liveVideo");
   const videoOverlay = $("#videoOverlay");
-  const btnConnect = $("#btnConnect");
+  // const btnConnect = $("#btnConnect"); // replaced by btnJoinRoom
   const btnShare = $("#btnShare");
   const remoteWrap = $("#remoteVideos");
   const remotePrev = $("#remotePrev");
@@ -148,20 +154,99 @@ async function loadLivePage() {
   const remotePinnedInfo = $("#remotePinnedInfo");
   const btnQuality = $("#btnQuality");
 
+  const btnLocalCam = $("#btnLocalCam");
+  const btnLocalMic = $("#btnLocalMic");
+  const btnLeave = $("#btnLeave");
+  const btnRecord = $("#btnRecord");
+  const recordHint = $("#recordHint");
+
   let connected = false;
   let room = null;
   let localCamTrack = null;
   let localMicTrack = null;
   let screenPub = null;
+
+  // Local state for toggles
+  let isCamOn = true;
+  let isMicOn = true;
+
   const remoteList = []; // [{sid, el}]
   let remotePage = 0;
   const REMOTE_PER_PAGE = 16; // 4x4
   let remoteViewMode = "grid"; // grid | speaker
   let pinnedSid = null;
   let qualityMode = "high"; // high | balanced
-  renderRemotePage();
 
-  function setOverlay(text) {
+  // --- PREVIEW LOGIC ---
+  let previewStream = null;
+
+  async function startPreview() {
+    if (preJoinView) preJoinView.style.display = "block";
+    if (liveRoomView) liveRoomView.style.display = "none";
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      previewStream = stream;
+      if (previewVideo) {
+        previewVideo.srcObject = stream;
+        previewVideo.volume = 0; // mute self preview
+      }
+      isCamOn = true;
+      isMicOn = true;
+      updatePreviewBtns();
+    } catch (e) {
+      console.warn("Preview failed", e);
+      // 권한 거부됨 -> 버튼 상태 업데이트
+      isCamOn = false;
+      isMicOn = false;
+      updatePreviewBtns();
+      showToast("카메라/마이크 권한이 필요합니다.", "warn");
+    }
+  }
+
+  function updatePreviewBtns() {
+    if (previewCamBtn) {
+      previewCamBtn.textContent = isCamOn ? "카메라 끄기" : "카메라 켜기";
+      previewCamBtn.className = isCamOn ? "btn" : "btn danger";
+    }
+    if (previewMicBtn) {
+      previewMicBtn.textContent = isMicOn ? "마이크 끄기" : "마이크 켜기";
+      previewMicBtn.className = isMicOn ? "btn" : "btn danger";
+    }
+    if (previewStream) {
+      const vTrack = previewStream.getVideoTracks()[0];
+      const aTrack = previewStream.getAudioTracks()[0];
+      if (vTrack) vTrack.enabled = isCamOn;
+      if (aTrack) aTrack.enabled = isMicOn;
+    }
+  }
+
+  previewCamBtn?.addEventListener("click", () => {
+    isCamOn = !isCamOn;
+    updatePreviewBtns();
+  });
+  previewMicBtn?.addEventListener("click", () => {
+    isMicOn = !isMicOn;
+    updatePreviewBtns();
+  });
+
+  btnJoinRoom?.addEventListener("click", async () => {
+    // Stop preview stream before joining (LiveKit will create new tracks)
+    if (previewStream) {
+      previewStream.getTracks().forEach(t => t.stop());
+      previewStream = null;
+    }
+    await joinRoom();
+  });
+
+
+  // --- ROOM LOGIC ---
+
+  async function joinRoom() {
+    if (preJoinView) preJoinView.style.display = "none";
+    if (liveRoomView) liveRoomView.style.display = "block";
+    setOverlay("연결 중...");
+
     if (!videoOverlay) return;
     videoOverlay.textContent = text;
     videoOverlay.style.display = text ? "grid" : "none";
@@ -173,7 +258,7 @@ async function loadLivePage() {
       track.attach(liveVideo);
       liveVideo.muted = true;
       const p = liveVideo.play?.();
-      if (p && typeof p.catch === "function") p.catch(() => {});
+      if (p && typeof p.catch === "function") p.catch(() => { });
     } catch (e) {
       console.error(e);
     }
@@ -309,7 +394,7 @@ async function loadLivePage() {
 
   function setConnectedUI(isOn) {
     connected = isOn;
-    if (btnConnect) btnConnect.textContent = connected ? "연결 해제" : "카메라/마이크 연결";
+    // if (btnConnect) btnConnect.textContent = connected ? "연결 해제" : "카메라/마이크 연결"; // Removed: btnConnect no longer exists
     if (!connected) {
       if (liveVideo) {
         if (liveVideo.srcObject) liveVideo.srcObject = null;
@@ -327,13 +412,13 @@ async function loadLivePage() {
   async function disconnectRoom() {
     try {
       if (screenPub?.track && room?.localParticipant?.unpublishTrack) {
-        try { await room.localParticipant.unpublishTrack(screenPub.track, true); } catch (_) {}
+        try { await room.localParticipant.unpublishTrack(screenPub.track, true); } catch (_) { }
       }
       if (localCamTrack?.stop) localCamTrack.stop();
       if (localMicTrack?.stop) localMicTrack.stop();
       if (screenPub?.track?.stop) screenPub.track.stop();
       if (room) room.disconnect();
-    } catch (_) {}
+    } catch (_) { }
     room = null;
     localCamTrack = null;
     localMicTrack = null;
@@ -420,7 +505,7 @@ async function loadLivePage() {
         if (track.kind === "video") {
           addRemote(track, publication, participant);
         } else if (track.kind === "audio") {
-          try { track.attach(); } catch (_) {}
+          try { track.attach(); } catch (_) { }
         }
       });
       room.on(LK.RoomEvent.TrackUnsubscribed, (_track, publication) => {
@@ -458,7 +543,7 @@ async function loadLivePage() {
       } else {
         try {
           room.localParticipant.unpublishTrack(screenPub.track, true);
-        } catch (_) {}
+        } catch (_) { }
         screenPub = null;
         if (btnShare) btnShare.textContent = "화면 공유";
         if (localCamTrack) attachLocal(localCamTrack);
@@ -473,14 +558,14 @@ async function loadLivePage() {
   // 녹화: 선생님(본인수업)만 가능
   // - 실제 영상 blob은 IndexedDB에 저장
   // - 다시보기 목록에는 vodKey 메타데이터만 저장
-  const btnRecord = $("#btnRecord");
-  const recordHint = $("#recordHint");
+  // const btnRecord = $("#btnRecord"); // Declared at top
+  // const recordHint = $("#recordHint"); // Declared at top
   let recording = false;
   let recorder = null;
   let recordChunks = [];
 
   if (btnRecord) {
-      if (!isOwnerTeacher) {
+    if (!isOwnerTeacher) {
       setGateDisabled(btnRecord, true);
       btnRecord.textContent = "녹화(선생님 전용)";
     } else {
@@ -595,49 +680,78 @@ async function loadLivePage() {
       console.error(e);
     }
 
-    const list = (getChat()[classId] || []);
-    chatLog.innerHTML = list.map(m => `
-      <div class="msg ${m.userId === user.id ? "me" : ""}">
-        <div class="mmeta">${displayName(m)} | ${displayRole(m)} | ${new Date(m.sentAt || m.at).toLocaleTimeString("ko-KR")}</div>
+    function renderMessageHtml(m) {
+      return `
+      <div class="msg ${m.userId === user.id ? "me" : ""} ${m.isOptimistic ? "optimistic" : ""}">
+        <div class="mmeta">${displayName(m)} | ${displayRole(m)} | ${new Date(m.sentAt || m.at || Date.now()).toLocaleTimeString("ko-KR")}</div>
         <div class="mtext">${escapeHtml(m.message || m.text || "")}</div>
       </div>
-    `).join("");
+    `;
+    }
+
+    const list = (getChat()[classId] || []);
+    chatLog.innerHTML = list.map(m => renderMessageHtml(m)).join("");
     chatLog.scrollTop = chatLog.scrollHeight;
   }
 
   async function pushChat(text) {
     const t = String(text || "").trim();
     if (!t) return;
+
+    // 1. Clear input immediately
+    if (chatInput) chatInput.value = "";
+
+    // 2. Optimistic Update
+    const tempMsg = {
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      message: t,
+      sentAt: new Date().toISOString(),
+      isOptimistic: true // CSS can style this transparently if needed
+    };
+    if (chatLog) {
+      const tempHtml = renderMessageHtml(tempMsg);
+      // Append directly
+      chatLog.insertAdjacentHTML('beforeend', tempHtml);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
     try {
       await apiPost(`/api/classes/${encodeURIComponent(classId)}/chat`, { message: t });
-      await renderChat();
+      // 3. Background sync (silent)
+      renderChat();
     } catch (e) {
       console.error(e);
       alert("채팅 전송 실패");
+      renderChat();
     }
-  }
-
-  chatSend?.addEventListener("click", () => pushChat(chatInput?.value));
-  chatInput?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      pushChat(chatInput?.value);
-    }
-  });
-
-  renderChat();
-
-  $("#btnLeave")?.addEventListener("click", async () => {
-    await disconnectRoom();
-    window.__pageCleanup = null;
-    goClassDetail(classId);
-  });
-
-  // 출석 로그(학생 활성 수강자만)
-  if (user?.role === "student" && activeStudent) {
-    apiPost(`/api/classes/${encodeURIComponent(classId)}/attendance`, {}).catch(console.error);
   }
 }
+
+chatSend?.addEventListener("click", () => pushChat(chatInput?.value));
+chatInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    pushChat(chatInput?.value);
+  }
+});
+
+renderChat();
+
+$("#btnLeave")?.addEventListener("click", async () => {
+  await disconnectRoom();
+  window.__pageCleanup = null;
+  goClassDetail(classId);
+});
+
+// 출석 로그(학생 활성 수강자만)
+if (user?.role === "student" && activeStudent) {
+  apiPost(`/api/classes/${encodeURIComponent(classId)}/attendance`, {}).catch(console.error);
+}
+// Start Preview immediately
+startPreview();
 
 // ---------------------------
 // ? INIT

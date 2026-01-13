@@ -19,7 +19,7 @@ function ensureReplayModalBinding() {
   function close() {
     // ?? ?? ? ?? ??
     if (vodVideo) {
-      try { vodVideo.pause(); } catch (_) {}
+      try { vodVideo.pause(); } catch (_) { }
       vodVideo.removeAttribute("src");
       vodVideo.load();
     }
@@ -70,7 +70,7 @@ function ensureReplayModalBinding() {
         vodVideo.style.display = "block";
         if (vodEmpty) vodEmpty.style.display = "none";
         // ???? ?? (???? ??? ?? ??? ? ??)
-        vodVideo.play().catch(() => {});
+        vodVideo.play().catch(() => { });
       }
     }
 
@@ -271,6 +271,7 @@ async function loadClassDetailPage() {
   let protectedLoaded = false;
   async function fetchMaterialsData() {
     if (!isDetailPageActive()) return;
+    if (!getUser()) return; // GUEST: Do not fetch protected data
     if (detailLoadCache.mats) return;
     detailLoadCache.mats = true;
     try {
@@ -288,6 +289,7 @@ async function loadClassDetailPage() {
   }
   async function fetchAssignmentsData() {
     if (!isDetailPageActive()) return;
+    if (!getUser()) return; // GUEST: Do not fetch protected data
     if (detailLoadCache.assigns) return;
     detailLoadCache.assigns = true;
     try {
@@ -305,6 +307,8 @@ async function loadClassDetailPage() {
   }
   async function fetchReviewsData() {
     if (!isDetailPageActive()) return;
+    // Reviews are protected in server.js (requireAuth)
+    if (!getUser()) return;
     if (detailLoadCache.revs) return;
     detailLoadCache.revs = true;
     try {
@@ -322,6 +326,8 @@ async function loadClassDetailPage() {
   }
   async function fetchQnaData() {
     if (!isDetailPageActive()) return;
+    // Q&A is protected in server.js (requireAuth)
+    if (!getUser()) return;
     if (detailLoadCache.qnas) return;
     detailLoadCache.qnas = true;
     try {
@@ -363,8 +369,8 @@ async function loadClassDetailPage() {
   function setDurationOptions() {
     const weekly = planWeekly?.checked ?? true;
     const opts = weekly
-      ? [1,2,3,4,6,8,12].map(n => ({ v:n, t:`${n}주` }))
-      : [1,2,3,4,6,12].map(n => ({ v:n, t:`${n}개월` }));
+      ? [1, 2, 3, 4, 6, 8, 12].map(n => ({ v: n, t: `${n}주` }))
+      : [1, 2, 3, 4, 6, 12].map(n => ({ v: n, t: `${n}개월` }));
 
     if (durationLabel) durationLabel.textContent = weekly ? "기간(주)" : "기간(개월)";
     if (durationSel) {
@@ -425,22 +431,22 @@ async function loadClassDetailPage() {
     return { state: "unknown", e: null, active: false, endText: "-" };
   }
 
-function ensureProtectedData() {
-  if (!isDetailPageActive()) return;
-  if (protectedLoaded) return;
-  const status = getEnrollStatusForUI(getUser());
-  const allowed = status.state === "owner_teacher" || status.state === "student_active";
-  if (!allowed) return;
-  protectedLoaded = true;
-  // 현재 탭 우선, 나머지는 탭 클릭 시 로드
-  const activeTab = $("#detailTabNav .pill.active")?.getAttribute("data-tab");
-  if (activeTab === "materials") fetchMaterialsData();
-  if (activeTab === "assignments") fetchAssignmentsData();
-  if (activeTab === "reviews") fetchReviewsData();
-  if (activeTab === "qna") fetchQnaData();
-  // 지난 수업은 바로 보여줘야 하므로 로드
-  renderReplaysList(c.id);
-}
+  function ensureProtectedData() {
+    if (!isDetailPageActive()) return;
+    if (protectedLoaded) return;
+    const status = getEnrollStatusForUI(getUser());
+    const allowed = status.state === "owner_teacher" || status.state === "student_active";
+    if (!allowed) return;
+    protectedLoaded = true;
+    // 현재 탭 우선, 나머지는 탭 클릭 시 로드
+    const activeTab = $("#detailTabNav .pill.active")?.getAttribute("data-tab");
+    if (activeTab === "materials") fetchMaterialsData();
+    if (activeTab === "assignments") fetchAssignmentsData();
+    if (activeTab === "reviews") fetchReviewsData();
+    if (activeTab === "qna") fetchQnaData();
+    // 지난 수업은 바로 보여줘야 하므로 로드
+    renderReplaysList(c.id);
+  }
 
   function refreshGates() {
     if (!isDetailPageActive()) return;
@@ -452,7 +458,7 @@ function ensureProtectedData() {
         if (!syncing) {
           fetchEnrollmentsForUser(user, 0, { force: true })
             .then(() => { if (isDetailPageActive()) refreshGates(); })
-            .catch(() => {});
+            .catch(() => { });
         }
       }
     }
@@ -709,7 +715,11 @@ function ensureProtectedData() {
     const prevSelected = assignPendingSelect || selectEl?.value || null;
     if (selectEl) {
       selectEl.innerHTML = assignList.length
-        ? assignList.map(a => `<option value="${escapeAttr(a.id)}">${escapeHtml(a.title || "무제")} · ${a.dueAt ? new Date(a.dueAt).toLocaleString("ko-KR") : "마감 없음"}</option>`).join("")
+        ? assignList.map(a => {
+          const isSub = a.submissions && a.submissions.length > 0;
+          const badge = isSub ? " ✅ (제출됨)" : "";
+          return `<option value="${escapeAttr(a.id)}">${escapeHtml(a.title || "무제")}${badge} · ${a.dueAt ? new Date(a.dueAt).toLocaleString("ko-KR") : "마감 없음"}</option>`;
+        }).join("")
         : `<option>등록된 과제가 없습니다</option>`;
       if (prevSelected && assignMap[prevSelected]) {
         selectEl.value = prevSelected;
@@ -737,7 +747,11 @@ function ensureProtectedData() {
     const isOwnerTeacher = isOwnerTeacherForClass(user, c);
     const myEmail = normalizeEmail(user?.email || "");
     const submissions = Array.isArray(meta?.submissions) ? meta.submissions : [];
-    const myAssign = submissions.find(a => normalizeEmail(a.userEmail || a.studentEmail || "") === myEmail || a.studentId === user?.id) || null;
+    // SECURITY FIX: Ensure user exists and has email before finding submission.
+    // Guests (user=null) should never match any submission, even one with missing email.
+    const myAssign = (user && myEmail)
+      ? submissions.find(a => normalizeEmail(a.userEmail || a.studentEmail || "") === myEmail || a.studentId === user.id)
+      : null;
     const formWrap = document.getElementById("assignFormWrap");
     const textEl = document.getElementById("assignText");
     const fileEl = document.getElementById("assignFile");
@@ -832,18 +846,27 @@ function ensureProtectedData() {
       const statusEl = document.getElementById("assignStatus");
       if (statusEl) statusEl.style.display = "none";
     } else {
-      // 학생: 선택된 과제 기준으로만 편집 버튼/입력 노출 결정
-      const hasSubmission = !!myAssign;
-      if (hasSubmission) {
-        if (isEditingStudent) {
-          toggleStudentFields(true);
-        } else {
-          if (formWrap) formWrap.dataset.editing = "0";
-          toggleStudentFields(false);
-        }
+      // 학생/게스트 로직
+      if (!user) {
+        // 게스트: 폼 숨기고 로그인 유도 메시지 표시
+        toggleStudentFields(false);
+        if (formWrap) formWrap.style.display = "none";
+        // 상태 메시지는 아래에서 처리
       } else {
-        if (formWrap) formWrap.dataset.editing = "1";
-        toggleStudentFields(true);
+        // 로그인한 학생: 선택된 과제 기준으로 편집/제출 UI 노출
+        const hasSubmission = !!myAssign;
+        if (hasSubmission) {
+          if (isEditingStudent) {
+            toggleStudentFields(true);
+          } else {
+            if (formWrap) formWrap.dataset.editing = "0";
+            toggleStudentFields(false);
+          }
+        } else {
+          // 미제출 상태면 작성 폼 노출
+          if (formWrap) formWrap.dataset.editing = "1";
+          toggleStudentFields(true);
+        }
       }
     }
 
@@ -862,7 +885,9 @@ function ensureProtectedData() {
       if (wrap) wrap.insertBefore(statusEl, document.getElementById("assignFormWrap"));
     }
     if (statusEl) {
-      if (!assignList.length) {
+      if (!user) {
+        statusEl.innerHTML = `<span class="muted">과제를 제출하거나 확인하려면 <a href="#" onclick="window.AuthModal?.open(); return false;" style="text-decoration:underline;">로그인</a>이 필요합니다.</span>`;
+      } else if (!assignList.length) {
         statusEl.textContent = "등록된 과제가 없습니다.";
       } else {
         const dueTxt = meta?.dueAt ? `마감: ${new Date(meta.dueAt).toLocaleString("ko-KR")}` : "마감 설정 없음";
@@ -870,9 +895,10 @@ function ensureProtectedData() {
           const submitted = myAssign.submittedAt || myAssign.at;
           const updated = myAssign.updatedAt ? ` / 수정: ${new Date(myAssign.updatedAt).toLocaleString("ko-KR")}` : "";
           const titleTxt = assignMap[myAssign.assignId || selectedAssignId || ""]?.title || "과제";
-          statusEl.textContent = `${titleTxt} 제출 완료 (${new Date(submitted).toLocaleString("ko-KR")}${updated}) · ${dueTxt} · 수정하려면 수정 버튼을 눌러주세요.`;
+          // Highlight "Submitted" status
+          statusEl.innerHTML = `<strong>[제출 완료]</strong> ${titleTxt} (${new Date(submitted).toLocaleString("ko-KR")}${updated}) · ${dueTxt} · <span style="color:#6d5efc;">수정하려면 아래 '수정' 버튼을 누르세요.</span>`;
         } else {
-          statusEl.textContent = `선택된 과제: ${assignMap[selectedAssignId || latestAssignId || ""]?.title || "과제"} · ${dueTxt}`;
+          statusEl.textContent = `선택된 과제: ${assignMap[selectedAssignId || latestAssignId || ""]?.title || "과제"} · ${dueTxt} · 미제출`;
         }
       }
     }
@@ -895,10 +921,10 @@ function ensureProtectedData() {
             <input type="text" id="assignTitleInput" class="input" style="width:220px;" placeholder="과제명" value="${escapeAttr(meta.title || "")}">
             <input type="date" id="assignDueDate" class="input" style="width:160px;">
             <select id="assignDueHour" class="input" style="width:90px;">
-              ${Array.from({length:24},(_,i)=>`<option value="${i}">${String(i).padStart(2,"0")}시</option>`).join("")}
+              ${Array.from({ length: 24 }, (_, i) => `<option value="${i}">${String(i).padStart(2, "0")}시</option>`).join("")}
             </select>
             <select id="assignDueMin" class="input" style="width:90px;">
-              ${["00","10","20","30","40","50"].map(m=>`<option value="${Number(m)}">${m}분</option>`).join("")}
+              ${["00", "10", "20", "30", "40", "50"].map(m => `<option value="${Number(m)}">${m}분</option>`).join("")}
             </select>
             <button class="btn" id="assignDueSave">저장</button>
             <button class="btn" id="assignDueClear">초기화</button>
@@ -918,10 +944,10 @@ function ensureProtectedData() {
       if (dueDate && dueHour && dueMin) {
         if (meta?.dueAt) {
           const dt = new Date(meta.dueAt);
-          dueDate.value = dt.toISOString().slice(0,10);
+          dueDate.value = dt.toISOString().slice(0, 10);
           dueHour.value = dt.getHours();
           const m = dt.getMinutes();
-          dueMin.value = [0,10,20,30,40,50].includes(m) ? m : 0;
+          dueMin.value = [0, 10, 20, 30, 40, 50].includes(m) ? m : 0;
         } else {
           dueDate.value = "";
           dueHour.value = "23";
@@ -934,10 +960,10 @@ function ensureProtectedData() {
         const minStr = document.getElementById("assignDueMin")?.value || "0";
         let dueIso = null;
         if (dateStr) {
-          const [y,m,dv] = dateStr.split("-").map(Number);
+          const [y, m, dv] = dateStr.split("-").map(Number);
           const hh = Number(hourStr);
           const mm = Number(minStr);
-          const dt = new Date(y, (m||1)-1, dv||1, hh||0, mm||0, 0, 0);
+          const dt = new Date(y, (m || 1) - 1, dv || 1, hh || 0, mm || 0, 0, 0);
           dueIso = dt.toISOString();
         }
         const title = (document.getElementById("assignTitleInput")?.value || "").trim();
@@ -1029,10 +1055,10 @@ function ensureProtectedData() {
             if (d) d.value = target.description || target.desc || "";
             if (target.dueAt && dueDate && dueHour && dueMin) {
               const dt = new Date(target.dueAt);
-              dueDate.value = dt.toISOString().slice(0,10);
+              dueDate.value = dt.toISOString().slice(0, 10);
               dueHour.value = dt.getHours();
               const m = dt.getMinutes();
-              dueMin.value = [0,10,20,30,40,50].includes(m) ? m : 0;
+              dueMin.value = [0, 10, 20, 30, 40, 50].includes(m) ? m : 0;
             } else {
               if (dueDate) dueDate.value = "";
               if (dueHour) dueHour.value = "23";
@@ -1081,17 +1107,17 @@ function ensureProtectedData() {
     if (!isOwnerTeacher) {
       // 학생 화면: 선택된 과제 기준으로 본인 제출만 보여주기
       if (myAssign) {
-      const scoreVal = (myAssign.score ?? "") === "" || myAssign.score === null ? null : myAssign.score;
-      const feedbackVal = myAssign.feedback || "";
-      const gradedLine = (scoreVal !== null || feedbackVal)
-        ? `<div class="session-sub" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        const scoreVal = (myAssign.score ?? "") === "" || myAssign.score === null ? null : myAssign.score;
+        const feedbackVal = myAssign.feedback || "";
+        const gradedLine = (scoreVal !== null || feedbackVal)
+          ? `<div class="session-sub" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             <span class="chip" style="padding:4px 8px;">점수</span>
             <strong>${scoreVal === null ? "미입력" : `${escapeHtml(scoreVal)}점`}</strong>
             <span class="chip" style="padding:4px 8px;">코멘트</span>
             <span>${feedbackVal ? escapeHtml(feedbackVal) : "미입력"}</span>
           </div>`
-        : `<div class="session-sub" style="color:rgba(15,23,42,.6);">채점 대기 중입니다.</div>`;
-      list.innerHTML = `
+          : `<div class="session-sub" style="color:rgba(15,23,42,.6);">채점 대기 중입니다.</div>`;
+        list.innerHTML = `
         <div class="muted" style="margin-bottom:6px;">제출한 과제는 선생님만 확인할 수 있습니다.</div>
         <div class="session-item" style="border-left:3px solid rgba(109,94,252,.35);">
           <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;">
@@ -1123,47 +1149,47 @@ function ensureProtectedData() {
         // 내 제출 수정: 폼에 값 채워서 다시 제출할 수 있게
         $("#assignEditMine")?.addEventListener("click", () => {
           const sel = document.getElementById("assignSelect");
-      if (sel && myAssign.assignId) sel.value = myAssign.assignId;
-      const txt = document.getElementById("assignText");
-      if (txt) txt.value = myAssign.content || myAssign.text || "";
-      assignExistingFile = buildExistingFile(myAssign);
-      if (fileEl) fileEl.value = "";
-      if (assignExistingFile) {
-        renderFilePreview(`${assignExistingFile.name} (기존 첨부)`, () => { assignExistingFile = null; });
-      } else {
-        renderFilePreview("");
-      }
-      const status = document.getElementById("assignStatus");
-      if (status) status.textContent = "수정 후 다시 제출 버튼을 눌러주세요.";
-      if (formWrap) formWrap.dataset.editing = "1";
-      toggleStudentFields(true);
-      if (formWrap) formWrap.style.display = "block";
+          if (sel && myAssign.assignId) sel.value = myAssign.assignId;
+          const txt = document.getElementById("assignText");
+          if (txt) txt.value = myAssign.content || myAssign.text || "";
+          assignExistingFile = buildExistingFile(myAssign);
+          if (fileEl) fileEl.value = "";
+          if (assignExistingFile) {
+            renderFilePreview(`${assignExistingFile.name} (기존 첨부)`, () => { assignExistingFile = null; });
+          } else {
+            renderFilePreview("");
+          }
+          const status = document.getElementById("assignStatus");
+          if (status) status.textContent = "수정 후 다시 제출 버튼을 눌러주세요.";
+          if (formWrap) formWrap.dataset.editing = "1";
+          toggleStudentFields(true);
+          if (formWrap) formWrap.style.display = "block";
         });
         // 제출한 상태에서는 기본적으로 입력 필드 숨김 (수정 버튼을 눌렀을 때만 다시 보임)
-      const showForm = formWrap?.dataset.editing === "1";
-      if (formWrap) {
-        formWrap.dataset.editing = showForm ? "1" : "0";
-        formWrap.style.display = showForm ? "block" : "none";
+        const showForm = formWrap?.dataset.editing === "1";
+        if (formWrap) {
+          formWrap.dataset.editing = showForm ? "1" : "0";
+          formWrap.style.display = showForm ? "block" : "none";
+        }
+        if (showForm && myAssign && !assignExistingFile) {
+          assignExistingFile = buildExistingFile(myAssign);
+        }
+        toggleStudentFields(showForm);
+        if (!showForm) renderFilePreview("");
+        if (showForm && assignExistingFile) {
+          renderFilePreview(`${assignExistingFile.name} (기존 첨부)`, () => { assignExistingFile = null; });
+        }
+      } else {
+        list.innerHTML = `<div class="muted" style="font-size:13px;">제출한 과제가 없습니다. 제출 후에는 선생님만 전체 목록을 볼 수 있습니다.</div>`;
+        toggleStudentFields(true);
+        if (formWrap) {
+          formWrap.dataset.editing = "1";
+          formWrap.style.display = "block";
+        }
+        renderFilePreview("");
       }
-      if (showForm && myAssign && !assignExistingFile) {
-        assignExistingFile = buildExistingFile(myAssign);
-      }
-      toggleStudentFields(showForm);
-      if (!showForm) renderFilePreview("");
-      if (showForm && assignExistingFile) {
-        renderFilePreview(`${assignExistingFile.name} (기존 첨부)`, () => { assignExistingFile = null; });
-      }
-    } else {
-      list.innerHTML = `<div class="muted" style="font-size:13px;">제출한 과제가 없습니다. 제출 후에는 선생님만 전체 목록을 볼 수 있습니다.</div>`;
-      toggleStudentFields(true);
-      if (formWrap) {
-        formWrap.dataset.editing = "1";
-        formWrap.style.display = "block";
-      }
-      renderFilePreview("");
-    }
-    attachSubmissionFileFetchHandlers();
-    return;
+      attachSubmissionFileFetchHandlers();
+      return;
     }
 
     list.innerHTML = assignList.length
@@ -1179,24 +1205,24 @@ function ensureProtectedData() {
             ${subCount ? `
               <div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">
                 ${a.submissions.map(s => {
-                  const when = new Date(s.submittedAt || s.at || s.updatedAt || Date.now()).toLocaleString("ko-KR");
-                  const whoRaw = s.student?.name || s.student?.email || s.studentName || s.studentEmail || "";
-                  const who = escapeHtml(whoRaw || "학생");
-                  const txt = escapeHtml(s.content || s.text || "");
-                  const fUrl = s.fileUrl || s.fileData || "";
-                  const fName = s.fileName || inferFileName(fUrl) || "첨부 파일";
-                  const fileRow = (fUrl || s.hasFile) ? `<div class="session-sub" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          const when = new Date(s.submittedAt || s.at || s.updatedAt || Date.now()).toLocaleString("ko-KR");
+          const whoRaw = s.student?.name || s.student?.email || s.studentName || s.studentEmail || "";
+          const who = escapeHtml(whoRaw || "학생");
+          const txt = escapeHtml(s.content || s.text || "");
+          const fUrl = s.fileUrl || s.fileData || "";
+          const fName = s.fileName || inferFileName(fUrl) || "첨부 파일";
+          const fileRow = (fUrl || s.hasFile) ? `<div class="session-sub" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                       <span class="chip secondary" style="padding:4px 8px;">첨부</span>
                       ${fUrl
-                        ? `<a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>`
-                        : `<a href="#" data-fetch-file="${escapeAttr(s.id)}" data-file-name="${escapeAttr(fName)}" style="font-weight:700; text-decoration:underline;">${escapeHtml(fName)}</a>`}
+              ? `<a href="${escapeAttr(fUrl)}" download="${escapeAttr(fName)}" target="_blank" style="font-weight:700;">${escapeHtml(fName)}</a>`
+              : `<a href="#" data-fetch-file="${escapeAttr(s.id)}" data-file-name="${escapeAttr(fName)}" style="font-weight:700; text-decoration:underline;">${escapeHtml(fName)}</a>`}
                     </div>` : "";
-                  const scoreVal = (s.score ?? "") === "" || s.score === null ? "" : s.score;
-                  const feedbackVal = s.feedback || "";
-                  const gradedInfo = (scoreVal !== "" || feedbackVal)
-                    ? `저장됨 · ${new Date(s.gradedAt || s.updatedAt || Date.now()).toLocaleString("ko-KR")}`
-                    : "점수/피드백을 입력해 저장하세요.";
-                  const savedDisplay = `
+          const scoreVal = (s.score ?? "") === "" || s.score === null ? "" : s.score;
+          const feedbackVal = s.feedback || "";
+          const gradedInfo = (scoreVal !== "" || feedbackVal)
+            ? `저장됨 · ${new Date(s.gradedAt || s.updatedAt || Date.now()).toLocaleString("ko-KR")}`
+            : "점수/피드백을 입력해 저장하세요.";
+          const savedDisplay = `
                     <div class="session-sub" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
                       <span class="chip" style="padding:4px 8px;">점수</span>
                       <strong>${scoreVal === "" ? "미입력" : `${escapeHtml(scoreVal)}점`}</strong>
@@ -1204,7 +1230,7 @@ function ensureProtectedData() {
                       <span>${feedbackVal ? escapeHtml(feedbackVal) : "미입력"}</span>
                     </div>
                   `;
-                  return `
+          return `
                     <div class="card" style="padding:10px 12px; background:rgba(255,255,255,.72);">
                       <div class="session-sub" style="font-weight:950;">${who} · ${when}</div>
                       <div class="session-sub" style="color:rgba(15,23,42,.6);">${gradedInfo}</div>
@@ -1221,7 +1247,7 @@ function ensureProtectedData() {
                       </div>
                     </div>
                   `;
-                }).join("")}
+        }).join("")}
               </div>
             ` : ``}
           </div>
@@ -1246,7 +1272,7 @@ function ensureProtectedData() {
       $$("[data-grade-save]").forEach(btn => {
         btn.addEventListener("click", async () => {
           // 클릭 시 폼 submit 방지
-          try { btn.closest("form")?.addEventListener("submit", (ev) => ev.preventDefault(), { once: true }); } catch (_) {}
+          try { btn.closest("form")?.addEventListener("submit", (ev) => ev.preventDefault(), { once: true }); } catch (_) { }
           const subId = btn.getAttribute("data-grade-save");
           const asgId = btn.getAttribute("data-grade-assign");
           const scoreInput = document.querySelector(`[data-grade-score="${CSS.escape(subId)}"]`);
@@ -1384,7 +1410,7 @@ function ensureProtectedData() {
     if (!list) return;
     const revs = getReviews()[c.id] || [];
     const showName = (r) => escapeHtml(displayUserName(r));
-    const avg = revs.length ? (revs.reduce((s,r)=>s+(r.rating||0),0)/revs.length).toFixed(1) : "-";
+    const avg = revs.length ? (revs.reduce((s, r) => s + (r.rating || 0), 0) / revs.length).toFixed(1) : "-";
     list.innerHTML = `
       <div class="muted" style="margin-bottom:8px;">평점: ${avg} / 5 (${revs.length}명)</div>
       ${revs.length ? revs.map(r => `
@@ -1405,8 +1431,8 @@ function ensureProtectedData() {
     if (!list) return;
     const nameOf = (obj) => escapeHtml(displayUserName(obj));
     const roleOf = (obj) => escapeHtml(displayUserRole(obj));
-  const qnas = getQna()[c.id] || [];
-  list.innerHTML = qnas.length ? qnas.map(q => `
+    const qnas = getQna()[c.id] || [];
+    list.innerHTML = qnas.length ? qnas.map(q => `
     <div class="session-item">
       <div>
           <div class="session-title">${escapeHtml(q.question || q.text || "")}</div>
@@ -1500,7 +1526,7 @@ function ensureProtectedData() {
 
   // 과제 제출 (학생만)
   const assignForm = $("#assignFormWrap");
-    if (assignForm) assignForm.style.display = (user?.role === "student") ? "block" : "none";
+  if (assignForm) assignForm.style.display = (user?.role === "student") ? "block" : "none";
   $("#assignSubmitBtn")?.addEventListener("click", async () => {
     if (!user || user.role !== "student") return;
     const assignList = Array.isArray(getAssignments()[c.id]) ? getAssignments()[c.id] : [];

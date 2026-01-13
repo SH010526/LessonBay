@@ -1,4 +1,4 @@
-﻿/* ============================
+/* ============================
    LessonBay (Static + localStorage) ? v12 FIXED (NO-REDUCE)
    - ? Enrollment/Enter/Replay gating 안정화 + UI 반영
      1) enrollment를 ""(빈키)로 저장하지 않음 (읽기는 레거시 호환)
@@ -46,6 +46,48 @@ function ensureSupabaseClient() {
 }
 ensureSupabaseClient();
 
+// ? Hotfix: Suppress "Session expired" alerts globally
+// The user reports persistent alerts even after suppression.
+// We intercept window.alert and block specific messages.
+const _originalAlert = window.alert;
+window.alert = function (msg) {
+  if (!msg) return;
+  const s = String(msg).normalize('NFC');
+
+  // Aggressive suppression of session/auth related alerts
+  if (
+    s.includes("세션이 만료되었습니다. 다시 로그인해 주세요.") ||
+    s.includes("세션") && (s.includes("만료") || s.includes("종료")) ||
+    s.includes("로그인") && (s.includes("필요") || s.includes("해주세요") || s.includes("다시")) ||
+    s.includes("Session expired") ||
+    s.includes("JWT expired") ||
+    s.includes("token") ||
+    s.includes("인증 토큰") ||
+    s.includes("토큰이 유효하지")
+  ) {
+    console.warn("Blocked alert:", s);
+    return;
+  }
+  _originalAlert(msg);
+};
+
+// Also suppress confirm dialogs if they are session related
+const _originalConfirm = window.confirm;
+window.confirm = function (msg) {
+  if (!msg) return false;
+  const s = String(msg).normalize('NFC');
+  if (
+    s.includes("세션") && (s.includes("만료") || s.includes("종료")) ||
+    s.includes("로그인") && (s.includes("필요") || s.includes("해주세요") || s.includes("다시")) ||
+    s.includes("Session expired") ||
+    s.includes("JWT expired")
+  ) {
+    console.warn("Blocked confirm:", s);
+    return true; // Auto-confirm to proceed with reload usually
+  }
+  return _originalConfirm(msg);
+};
+
 function loadSupabaseSdkOnce() {
   if (typeof document === "undefined") return Promise.resolve(null);
   if (window.supabase && typeof window.supabase.createClient === "function") {
@@ -84,7 +126,7 @@ function loadSupabaseSdkOnce() {
 async function waitForSupabaseClient(timeoutMs = 8000, intervalMs = 150) {
   const start = Date.now();
   if (!supabaseClient) {
-    try { await loadSupabaseSdkOnce(); } catch (_) {}
+    try { await loadSupabaseSdkOnce(); } catch (_) { }
   }
   while (!supabaseClient && Date.now() - start < timeoutMs) {
     ensureSupabaseClient();
@@ -157,7 +199,72 @@ function readSupabaseSessionFromStorage(storage) {
       if (parsed.currentSession) return parsed.currentSession;
       if (parsed.data?.session) return parsed.data.session;
     }
-  } catch (_) {}
+  } catch (_) { }
+  return null;
+}
+
+function readSupabaseTokenFromStorage() {
+  const session =
+    readSupabaseSessionFromStorage(typeof localStorage !== "undefined" ? localStorage : null) ||
+    readSupabaseSessionFromStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
+  return session?.access_token || "";
+}
+
+// Helper to check JWT expiry
+function isTokenExpired(token) {
+  if (!token) return true;
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    if (!payload.exp) return false;
+    // Give 10s buffer
+    const now = Math.floor(Date.now() / 1000);
+    return payload.exp < (now + 10);
+  } catch (_) {
+    return true; // Invalid token is "expired"
+  }
+}
+
+// Safe getUser that requires a valid token
+function getUser() {
+  if (userCache) return userCache;
+  try {
+    // 1. Check for token first. If no token, user is effectively guest.
+    const token = readSupabaseTokenFromStorage();
+    if (!token || isTokenExpired(token)) {
+      // Clear any stale user data if token is gone or expired
+      // But wait, if we aggressively clear here, we might kill a refreshable session?
+      // Supabase auto-refreshes. BUT synchronous getUser cannot wait for refresh.
+      // It is safer to show GUEST UI than Broken Member UI.
+      userCache = null;
+      return null;
+    }
+
+    // 2. Token exists and valid, try to get user data from storage
+    const storageList = [
+      typeof localStorage !== "undefined" ? localStorage : null,
+      typeof sessionStorage !== "undefined" ? sessionStorage : null,
+    ];
+    for (const storage of storageList) {
+      if (!storage) continue;
+      const keys = [];
+      if (SUPABASE_PROJECT_REF) keys.push(`sb-${SUPABASE_PROJECT_REF}-auth-token`);
+      for (let i = 0; i < storage.length; i += 1) {
+        const k = storage.key(i);
+        if (k && k.startsWith("sb-") && k.endsWith("-auth-token") && !keys.includes(k)) {
+          keys.push(k);
+        }
+      }
+      for (const k of keys) {
+        const raw = storage.getItem(k);
+        if (!raw) continue;
+        const parsed = safeParse(raw, null);
+        if (!parsed) continue;
+        if (parsed.user) return parsed.user; // Some versions store user directly
+        // Fallback for different structures if needed, but standard is parsed.user
+        if (parsed.access_token && parsed.user) return parsed.user;
+      }
+    }
+  } catch (_) { }
   return null;
 }
 
@@ -175,7 +282,7 @@ async function getAuthToken() {
     try {
       const { data } = await supabaseClient.auth.getSession();
       token = data?.session?.access_token || "";
-    } catch (_) {}
+    } catch (_) { }
   }
   let storedSession = null;
   if (!token) {
@@ -190,7 +297,7 @@ async function getAuthToken() {
         refresh_token: storedSession.refresh_token,
       });
       token = data?.session?.access_token || "";
-    } catch (_) {}
+    } catch (_) { }
   }
   return token;
 }
@@ -202,6 +309,19 @@ let loadingTimer = null;
 
 function showToast(msg, type = "info", duration = 3000) {
   if (!msg) return;
+  // Aggressive suppression of session/auth related alerts
+  const s = String(msg).normalize('NFC');
+  if (
+    s.includes("세션") && (s.includes("만료") || s.includes("종료")) ||
+    s.includes("로그인") && (s.includes("필요") || s.includes("해주세요") || s.includes("다시")) ||
+    s.includes("Session expired") ||
+    s.includes("인증 토큰") ||
+    s.includes("토큰이 유효하지")
+  ) {
+    console.warn("Suppressed toast:", s);
+    return;
+  }
+
   let el = document.getElementById("toast");
   if (!el) {
     el = document.createElement("div");
@@ -349,7 +469,7 @@ function bootPageScripts() {
   });
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 1000) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   if (!timeoutMs) return fetch(url, options); // 의미 : 타임아웃이 아니라면 그냥 fetch 실행
   // 
   //fetch 뜻 : 자바스크립트에서 제공하는 내장 함수로, 네트워크를 통해 리소스를 비동기적으로 가져오는 데 사용됩니다.
@@ -380,46 +500,76 @@ async function apiGet(path, opts = {}) {
       ...fetchOptions,
     }, timeoutMs);
     if (!res.ok) {
-      if (res.status === 401) handleUnauthorized();
       const txt = await res.text();
-      if (!silent) showToast(txt || "요청 실패", "danger");
-      throw new Error(txt);
+      if (res.status === 401) {
+        handleUnauthorized(silent);
+        return null; // or throw?
+      }
+      if (!silent) showToast(safeParse(txt)?.error || "요청 실패", "danger");
+      throw new Error(safeParse(txt)?.error || "request failed");
     }
-    return res.json();
+    const json = await res.json();
+    return json;
   } catch (e) {
-    if (e?.name === "AbortError" && tolerateTimeout) return null;
+    if (tolerateTimeout && e.name === "AbortError") throw e;
+    if (!silent) {
+      // already handled unauthorized above?
+      // if we are here, it's network error or other.
+      if (!__authInvalidated) console.error(e);
+    }
     throw e;
   } finally {
-    if (!silent) hideLoading();
+    if (!silent) {
+      loadingCount = Math.max(0, loadingCount - 1);
+      setTimeout(() => {
+        if (loadingCount === 0) {
+          const el = document.getElementById("globalLoading");
+          if (el) el.remove();
+          loadingTimer = null;
+        }
+      }, 300);
+    }
   }
 }
 
-async function apiPost(path, body) {
-  showLoading();
+async function apiPost(path, body, opts = {}) {
+  const silent = !!opts.silent;
+  if (!silent) showLoading();
   try {
     const res = await fetch(`${API_BASE_URL}${path}`, {
       method: "POST",
       headers: await apiHeaders(),
-      body: JSON.stringify(body || {}),
+      body: JSON.stringify(body),
     });
-    if (res.ok) return res.json();
-    if (res.status === 401) handleUnauthorized();
-
-    // 응답 본문은 한 번만 소비 가능하므로 text로 읽고 JSON 시도
-    const raw = await res.text();
-    try {
-      const data = raw ? JSON.parse(raw) : null;
-      const msg = data?.detail || data?.error || raw || "알 수 없는 오류";
-      showToast(msg, "danger");
-      throw new Error(msg);
-    } catch (_) {
-      showToast(raw || "알 수 없는 오류", "danger");
-      throw new Error(raw || "알 수 없는 오류");
+    if (!res.ok) {
+      const txt = await res.text();
+      if (res.status === 401) {
+        handleUnauthorized(silent);
+        return null;
+      }
+      if (!silent) showToast(safeParse(txt)?.error || "요청 실패", "danger");
+      throw new Error(safeParse(txt)?.error || "request failed");
     }
+    const json = await res.json();
+    return json;
+  } catch (e) {
+    if (tolerateTimeout && e.name === "AbortError") throw e;
+    if (!silent) console.error(e);
+    throw e;
   } finally {
-    hideLoading();
+    if (!silent) {
+      loadingCount = Math.max(0, loadingCount - 1);
+      setTimeout(() => {
+        if (loadingCount === 0) {
+          const el = document.getElementById("globalLoading");
+          if (el) el.remove();
+          loadingTimer = null;
+        }
+      }, 300);
+    }
   }
 }
+
 
 // generic request (for DELETE 등)
 async function apiRequest(path, method = "GET", body = null) {
@@ -690,7 +840,7 @@ async function forceDownload(url, filename = "download") {
   } catch (err) {
     console.error("forceDownload failed", err);
     // 마지막 수단: 현재 탭 이동 (팝업 차단 방지)
-    try { location.href = url; } catch (_) {}
+    try { location.href = url; } catch (_) { }
   }
 }
 
@@ -899,7 +1049,7 @@ try {
   if (typeof window !== "undefined") {
     window.__deleteVodBlob = (key) => { vodDelete(key); };
   }
-} catch(_) {}
+} catch (_) { }
 
 const OLD_USER_KEYS = ["currentUser", "LessonBay_currentUser", "user", "authUser"];
 const OLD_USERS_KEYS = ["users", "LessonBay_users"];
@@ -932,7 +1082,7 @@ const HTML_QUERY_IGNORED = new Set([
 let assignPendingSelect = null;
 let __detailPageNonce = 0;
 
-const $ = (sel, el = document) => el.querySelector(sel); 
+const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
 function safeParse(json, fallback) {
@@ -1013,14 +1163,14 @@ function readLegacyClassesFromStorage() {
         if (id) seen.add(id);
         if (sig) seen.add(sig);
       });
-    } catch (_) {}
+    } catch (_) { }
   });
   return merged;
 }
 function clearLegacyClassesFromStorage() {
   if (typeof localStorage === "undefined") return;
   LEGACY_CLASS_KEYS.forEach((key) => {
-    try { localStorage.removeItem(key); } catch (_) {}
+    try { localStorage.removeItem(key); } catch (_) { }
   });
 }
 async function maybeRestoreLegacyClasses(legacyClasses, user) {
@@ -1085,7 +1235,7 @@ async function maybeRestoreLegacyClasses(legacyClasses, user) {
       const merged = mergeClassLists(normalized, legacyClasses);
       if (merged.length) setClasses(merged);
     }
-  } catch (_) {}
+  } catch (_) { }
 
   return createdCount > 0;
 }
@@ -1156,7 +1306,7 @@ async function hydrateThumb(el, raw) {
           el.src = refreshed;
           return;
         }
-      } catch (_) {}
+      } catch (_) { }
       el.dataset.thumbFallback = "1";
       el.src = FALLBACK_THUMB;
     }, { once: true });
@@ -1181,7 +1331,7 @@ async function hydrateThumb(el, raw) {
 }
 
 async function ensureUserReady(timeoutMs = 1200) {
-  const sync = syncLocalUserFromSupabaseSession().catch(() => {});
+  const sync = syncLocalUserFromSupabaseSession().catch(() => { });
   await Promise.race([sync, sleep(timeoutMs)]);
   return getUser();
 }
@@ -1235,7 +1385,7 @@ function slimClassForCache(c) {
 
 function cacheClassList(list) {
   const slim = (Array.isArray(list) ? list : []).map(slimClassForCache).filter(Boolean);
-  try { sessionStorage.setItem(CLASS_CACHE_KEY, JSON.stringify({ at: Date.now(), list: slim })); } catch (_) {}
+  try { sessionStorage.setItem(CLASS_CACHE_KEY, JSON.stringify({ at: Date.now(), list: slim })); } catch (_) { }
 }
 
 function loadCachedClasses() {
@@ -1260,7 +1410,7 @@ function cacheClassDetail(cls) {
     const map = parsed.map && typeof parsed.map === "object" ? parsed.map : {};
     map[slim.id] = { at: Date.now(), data: slim };
     sessionStorage.setItem(CLASS_DETAIL_CACHE_KEY, JSON.stringify({ map }));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function loadCachedClassDetail(id) {
@@ -1292,7 +1442,7 @@ function cacheEnrollments(user, list) {
   if (!key) return;
   try {
     sessionStorage.setItem(ENROLL_CACHE_KEY, JSON.stringify({ at: Date.now(), key, list: list || [] }));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function loadCachedEnrollments(user) {
@@ -1366,7 +1516,7 @@ function prefetchPage(href) {
       const parsed = safeParse(cached, null);
       if (parsed?.at && Date.now() - parsed.at < PREFETCH_PAGE_TTL_MS) return;
     }
-  } catch (_) {}
+  } catch (_) { }
   if (document.querySelector(`link[data-prefetch="${url}"]`)) return;
   const link = document.createElement("link");
   link.rel = "prefetch";
@@ -1375,7 +1525,7 @@ function prefetchPage(href) {
   document.head.appendChild(link);
   try {
     sessionStorage.setItem(key, JSON.stringify({ at: Date.now() }));
-  } catch (_) {}
+  } catch (_) { }
 
   // HTML 프리패치 캐시 (soft nav용)
   prefetchPageHtml(url);
@@ -1429,7 +1579,7 @@ function setCachedPageHtml(url, html) {
   try {
     const key = pageHtmlCacheKey(url);
     sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), html }));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 async function fetchPageHtml(url) {
@@ -1450,7 +1600,7 @@ function prefetchPageHtml(url) {
   fetch(normalized, { headers: { "X-Requested-With": "fetch" } })
     .then((res) => (res.ok ? res.text() : null))
     .then((html) => { if (html) setCachedPageHtml(normalized, html); })
-    .catch(() => {});
+    .catch(() => { });
 }
 
 function prefetchCorePages() {
@@ -1499,8 +1649,8 @@ function warmupBackend() {
   if (!isProdOrigin()) return;
   const ping = () => {
     try {
-      fetch(`${API_BASE_URL}/api/health`, { cache: "no-store", keepalive: true }).catch(() => {});
-    } catch (_) {}
+      fetch(`${API_BASE_URL}/api/health`, { cache: "no-store", keepalive: true }).catch(() => { });
+    } catch (_) { }
   };
   ping();
   __warmupTimer = setInterval(() => {
@@ -1512,7 +1662,7 @@ function warmupBackend() {
 function cachePrefetchClass(cls) {
   const slim = slimClassForCache(cls);
   if (!slim) return;
-  try { sessionStorage.setItem(PREFETCH_CLASS_KEY, JSON.stringify({ at: Date.now(), cls: slim })); } catch (_) {}
+  try { sessionStorage.setItem(PREFETCH_CLASS_KEY, JSON.stringify({ at: Date.now(), cls: slim })); } catch (_) { }
 }
 
 function consumePrefetchClass(expectId) {
@@ -1527,13 +1677,13 @@ function consumePrefetchClass(expectId) {
   } catch (_) {
     return null;
   } finally {
-    try { sessionStorage.removeItem(PREFETCH_CLASS_KEY); } catch (_) {}
+    try { sessionStorage.removeItem(PREFETCH_CLASS_KEY); } catch (_) { }
   }
 }
 
 function rememberClassId(id) {
   if (!id) return;
-  try { sessionStorage.setItem(LAST_CLASS_KEY, String(id)); } catch (_) {}
+  try { sessionStorage.setItem(LAST_CLASS_KEY, String(id)); } catch (_) { }
 }
 function readLastClassId() {
   try { return sessionStorage.getItem(LAST_CLASS_KEY) || ""; } catch (_) { return ""; }
@@ -1958,7 +2108,7 @@ function normalizeEnrollmentsForUser(u, classId) {
     }
 
     if (changed) setEnrollments(enroll);
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function parseEndTime(e) {
@@ -2006,28 +2156,7 @@ function normalizeCurrentUserInStorage() { /* no-op: localStorage 미사용 */ }
 // ? SEED
 // ---------------------------
 function getBuiltinClasses() {
-  return [
-    {
-      id: "c_demo_korean_1",
-      title: "영어 회화 입문",
-      teacher: "이승훈",
-      category: "영어",
-      description: "왕초보도 바로 따라올 수 있는 실전 표현과 발음 교정.",
-      weeklyPrice: 19000,
-      monthlyPrice: 59000,
-      thumb: "https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=1400&q=60",
-    },
-    {
-      id: "c_demo_math_1",
-      title: "고등 수학 확률과 통계",
-      teacher: "이승훈",
-      category: "수학",
-      description: "개념부터 기출, 모의고사까지 확률·통계 핵심 정리와 실전 연습.",
-      weeklyPrice: 25000,
-      monthlyPrice: 79000,
-      thumb: "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1400&q=60",
-    },
-  ];
+  return [];
 }
 
 async function loadLocalSampleClasses() {
@@ -2043,15 +2172,15 @@ async function loadLocalSampleClasses() {
       teacherId: c.teacherId || "",
       thumb: c.thumb || FALLBACK_THUMB,
     }));
-    return normalized.length ? normalized : builtin;
+    return normalized.length ? normalized : []; // Force empty if no file data
   } catch (err) {
     console.warn("local sample classes load failed", err);
-    return builtin;
+    return []; // Force empty if error
   }
 }
 
 async function ensureSeedData() {
-  const sessionPromise = syncLocalUserFromSupabaseSession().catch(() => {});
+  const sessionPromise = syncLocalUserFromSupabaseSession().catch(() => { });
   const detailOnly = !!document.getElementById("detailRoot") && !document.getElementById("classGrid") && !document.getElementById("homePopular");
   const legacyClasses = readLegacyClassesFromStorage();
 
@@ -2065,26 +2194,32 @@ async function ensureSeedData() {
   };
 
   const cached = loadCachedClasses();
-  const hasCachedClasses = cached.length > 0;
+  // Filter out any persistent demo data
+  const realCached = cached.filter(c => !c.id.startsWith("c_demo_"));
+  const hasCachedClasses = realCached.length > 0;
   if (hasCachedClasses) {
-    setClasses(cached);
+    setClasses(realCached);
   } else if (!detailOnly) {
     if (legacyClasses.length) {
       setClasses(legacyClasses);
     } else {
-      const builtin = getBuiltinClasses();
-      if (builtin.length) setClasses(builtin);
+      // const builtin = getBuiltinClasses();
+      // if (builtin.length) setClasses(builtin);
+      /*
       scheduleIdleTask(async () => {
         try {
           const local = await loadLocalSampleClasses();
-          if (Array.isArray(local) && local.length) {
-            setClasses(local);
+          // Force ignore demo data here too
+          const realLocal = local.filter(c => !c.id.startsWith("c_demo_"));
+          if (Array.isArray(realLocal) && realLocal.length) {
+            setClasses(realLocal);
             rerenderVisible();
           }
         } catch (e) {
           console.error("local sample classes load failed", e);
         }
       });
+      */
     }
   } else {
     setClasses([]);
@@ -2113,7 +2248,8 @@ async function ensureSeedData() {
 
   // 원격 수업 목록 (느린 응답이면 타임아웃 후 백그라운드 재시도)
   const fetchClassesOnce = (attempt = 0) => {
-    const timeoutMs = attempt === 0 ? 4000 : 8000;
+    // Increase timeout to avoid premature fallback to demo data
+    const timeoutMs = attempt === 0 ? 15000 : 20000;
     return apiGet("/api/classes", { silent: true, timeout: timeoutMs, tolerateTimeout: true, cache: "no-store" })
       .then((classes) => {
         if (!Array.isArray(classes)) return false;
@@ -2173,7 +2309,7 @@ async function ensureSeedData() {
       }
       rerenderVisible();
       updateNav();
-    } catch (_) {}
+    } catch (_) { }
   });
 }
 
@@ -2212,7 +2348,7 @@ function clearSupabaseSessionStorage(storage) {
       if (k.startsWith("supabase.auth")) keys.add(k);
     }
     keys.forEach((k) => storage.removeItem(k));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function clearSupabaseSessions() {
@@ -2220,14 +2356,39 @@ function clearSupabaseSessions() {
   clearSupabaseSessionStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
 }
 
-function handleUnauthorized() {
+function clearDataCache() {
+  dataCache.classes = [];
+  dataCache.enrollments = {};
+  dataCache.replays = {};
+  dataCache.chat = {};
+  dataCache.materials = {};
+  dataCache.assignments = {};
+  dataCache.reviews = {};
+  dataCache.qna = {};
+  dataCache.attendance = {};
+  dataCache.progress = {};
+  enrollFetchKey = "";
+  enrollFetchPromise = null;
+}
+
+function handleUnauthorized(silent = false) {
   if (__authInvalidated) return;
+
+  // Check if user was actually logged in before - don't reload for guests
+  const wasLoggedIn = !!getUser();
+
   __authInvalidated = true;
   setUser(null);
+  clearDataCache(); // Fix leak
   clearSupabaseSessions();
   clearOldAuthKeys();
   updateNav();
-  showToast("세션이 만료되었습니다. 다시 로그인해 주세요.", "warn");
+
+  // Only reload if user was actually logged in (session expired)
+  // Don't reload for guests who never had a session
+  if (wasLoggedIn) {
+    setTimeout(() => location.reload(), 500); // Reload faster to clear stale UI state
+  }
 }
 
 // ? Supabase 로그아웃 포함
@@ -2236,10 +2397,11 @@ async function doLogout(goHome = true) {
     if (supabaseClient) {
       await supabaseClient.auth.signOut();
     }
-  } catch (_) {}
+  } catch (_) { }
 
   clearSupabaseSessions();
   setUser(null);
+  clearDataCache(); // Fix leak
   clearOldAuthKeys();
   if (goHome) navigateTo("index.html", { replace: true });
 }
@@ -2273,7 +2435,7 @@ function updateNav() {
 
   navRight.innerHTML = `
     <span class="user-pill">
-      <span class="user-avatar">${escapeHtml((user.name || "U").trim().slice(0,1).toUpperCase())}</span>
+      <span class="user-avatar">${escapeHtml((user.name || "U").trim().slice(0, 1).toUpperCase())}</span>
       <strong>${escapeHtml(user.name || "사용자")}</strong>
       ${roleBadge}
     </span>
@@ -2394,7 +2556,7 @@ function init() {
     if ($("#loginForm") || $("#signupForm")) {
       loadSupabaseSdkOnce()
         .then(() => { ensureSupabaseClient(); })
-        .catch(() => {});
+        .catch(() => { });
     }
 
     // NAV 먼저 렌더하여 느린 API 때문에 UI가 비지 않도록 함

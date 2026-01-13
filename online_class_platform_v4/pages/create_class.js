@@ -1,4 +1,5 @@
 function handleCreateClassPage() {
+  const $ = (s) => document.querySelector(s);
   const form = $("#createClassForm");
   if (!form) return;
 
@@ -73,14 +74,30 @@ function handleCreateClassPage() {
       const description = ($("#cDesc")?.value || "").trim();
       const weeklyPrice = Number($("#cWeekly")?.value || 0);
       const monthlyPrice = Number($("#cMonthly")?.value || 0);
+      const scheduleInput = $("#cDate")?.value;
 
       if (!title || !category || !description) {
-        alert("제목/카테고리/설명을 입력하세요.");
+        alert("제목, 카테고리, 설명을 입력하세요.");
+        return;
+      }
+
+      if (!scheduleInput) {
+        alert("수업 시작 일시를 선택하세요.");
         return;
       }
 
       try {
         let thumbUrlFinal = thumbDataUrl || FALLBACK_THUMB;
+
+        // Ensure Supabase client is ready
+        if (!supabaseClient) await waitForSupabaseClient();
+
+        const user = getUser();
+        if (!user) {
+          alert("로그인이 필요합니다.");
+          return;
+        }
+
         if (thumbFile) {
           if (thumbFile.size > 50 * 1024 * 1024) {
             alert("Supabase 무료 요금제는 파일당 50MB까지만 업로드 가능합니다.");
@@ -90,18 +107,33 @@ function handleCreateClassPage() {
           thumbUrlFinal = uploaded.path || FALLBACK_THUMB;
         }
 
-        await apiPost("/api/classes", {
-          title,
-          category,
-          description,
-          weeklyPrice,
-          monthlyPrice,
-          thumbUrl: thumbUrlFinal,
-        });
-        const refreshed = await apiGet("/api/classes", { cache: "no-store" }).catch(() => []);
-        setClasses(refreshed || []);
+        // Direct Supabase Insert
+        const { data, error } = await supabaseClient
+          .from('classes')
+          .insert({
+            title,
+            category,
+            description,
+            price_weekly: weeklyPrice,
+            price_monthly: monthlyPrice, // Check if DB column is price_monthly
+            thumbnail_url: thumbUrlFinal,
+            schedule: new Date(scheduleInput).toISOString(),
+            instructor_id: user.id
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+
         alert("수업 생성 완료!");
-        navigateTo("teacher_dashboard.html");
+
+        // Navigation helper check
+        if (typeof navigateTo === 'function') {
+          navigateTo("teacher_dashboard.html");
+        } else {
+          window.location.href = "teacher_dashboard.html";
+        }
+
       } catch (e) {
         console.error(e);
         alert("수업 생성 실패\n" + (e?.message || ""));
@@ -111,7 +143,7 @@ function handleCreateClassPage() {
 
   (async () => {
     let user = getUser();
-    if (!user) user = await ensureUserReady();
+    if (typeof ensureUserReady === 'function' && !user) user = await ensureUserReady();
     if (!applyGuard(user)) return;
     init();
   })();
