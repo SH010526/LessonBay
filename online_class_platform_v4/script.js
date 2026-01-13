@@ -1,4 +1,4 @@
-﻿/* ============================
+/* ============================
    LessonBay (Static + localStorage) ? v12 FIXED (NO-REDUCE)
    - ? Enrollment/Enter/Replay gating 안정화 + UI 반영
      1) enrollment를 ""(빈키)로 저장하지 않음 (읽기는 레거시 호환)

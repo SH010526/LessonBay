@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="온라인 강의 플랫폼 학생 대시보드">
+    <meta name="description" content="수강 중인 클래스 관리 및 학습 현황을 확인하는 학생 대시보드입니다.">
     <meta name="theme-color" content="#4F46E5">
     <title>학생 대시보드 - LessonBay</title>
 
@@ -165,9 +165,9 @@
 <body>
     <header>
         <div class="header-content">
-            <a href="index.html" class="logo">📚 LessonBay</a>
+            <a href="index.html" class="logo"> LessonBay</a>
             <div class="header-actions">
-                <a href="classes.html" class="btn">강의 목록</a>
+                <a href="classes.html" class="btn">수업 탐색</a>
                 <button class="btn btn-primary" id="refreshBtn">새로고침</button>
                 <a href="logout.html" class="btn">로그아웃</a>
             </div>
@@ -181,25 +181,25 @@
 
         <div class="dashboard-grid" id="dashboardGrid">
             <div class="card" id="activeCoursesCard">
-                <h3 class="card-title">📖 수강 중인 강좌</h3>
+                <h3 class="card-title">수강 중인 수업</h3>
                 <p class="card-content">불러오는 중...</p>
             </div>
             <div class="card" id="activityCard">
-                <h3 class="card-title">🎯 최근 활동</h3>
-                <p class="card-content">불러오는 중...</p>
+                <h3 class="card-title">학습 활동</h3>
+                <p class="card-content">로딩 중...</p>
             </div>
         </div>
 
         <!-- Error Log Area for Debugging -->
         <div id="debugLog"
-            style="margin-top: 20px; padding: 10px; background: #fff0f0; border: 1px solid #ffcccc; display:none; border-radius: 8px;">
+            style="margin-top: 20px; padding: 10px; background: #fffbe6; border: 1px solid #ffe58f; display: none; border-radius: 8px;">
             <h4>Debug Info</h4>
             <pre id="debugContent" style="font-size: 12px; overflow-x: auto;"></pre>
         </div>
     </main>
 
     <footer class="footer">
-        <p>&copy; 2026 LessonBay. All rights reserved. | 마지막 업데이트: <time id="lastUpdated">방금 전</time></p>
+        <p>&copy; 2025 LessonBay. All rights reserved. | 최종 확인: <time id="lastUpdated">-</time></p>
     </footer>
 
     <script>
@@ -210,7 +210,7 @@
             if (debug && content) {
                 // debug.style.display = 'block'; // Uncomment to show debug visible to user
                 const time = new Date().toLocaleTimeString();
-                content.textContent += `[${time}] ${msg}\n${data ? JSON.stringify(data, null, 2) + '\n' : ''}`;
+                content.textContent += `[${time}] ${msg}${data ? ' ' + JSON.stringify(data, null, 2) : ''}\n`;
             }
         }
 
@@ -280,7 +280,7 @@
 
                 // Update Stats
                 const stats = [
-                    { number: courses.length, label: '수강 중인 강좌' },
+                    { number: courses.length, label: '수강 중인 수업' },
                     { number: '0%', label: '평균 진도율' }
                 ];
 
@@ -297,11 +297,11 @@
                 const dashboard = document.getElementById('dashboardGrid');
                 if (dashboard) {
                     dashboard.innerHTML = `
-                        <div class="card" style="grid-column: 1/-1; text-align: center; padding: 40px;">
-                            <h3 class="card-title">오류가 발생했습니다</h3>
-                            <button class="btn btn-primary" onclick="location.reload();">다시 시도</button>
-                        </div>
-                    `;
+            <div class="card" style="grid-column: 1/-1; text-align: center; padding: 40px;">
+              <h3 class="card-title">데이터를 불러오는 데 실패했습니다.</h3>
+              <button class="btn btn-primary" onclick="location.reload();">다시 시도</button>
+            </div>
+          `;
                 }
             }
         }
@@ -310,11 +310,11 @@
             const statsContainer = document.getElementById('statsContainer');
             if (statsContainer) {
                 statsContainer.innerHTML = stats.map(stat => `
-                    <div class="stat-box">
-                        <div class="stat-number">${stat.number}</div>
-                        <div class="stat-label">${stat.label}</div>
-                    </div>
-                `).join('');
+          <div class="stat-box">
+            <div class="stat-number">${stat.number}</div>
+            <div class="stat-label">${stat.label}</div>
+          </div>
+        `).join('');
             }
         }
 
@@ -324,26 +324,26 @@
 
             if (!courses || courses.length === 0) {
                 activeCoursesCard.innerHTML = `
-                    <h3 class="card-title">📖 수강 중인 강좌</h3>
-                    <p class="card-content" style="padding: 10px 0;">아직 수강 중인 강좌가 없습니다.</p>
-                    <a href="classes.html" class="btn btn-primary">강좌 둘러보기</a>
-                `;
+          <h3 class="card-title">수강 중인 수업</h3>
+          <p class="card-content" style="padding: 10px 0;">수강 중인 수업이 없습니다. 새로운 수업을 찾아보세요!</p>
+          <a href="classes.html" class="btn btn-primary">수업 탐색하기</a>
+        `;
                 return;
             }
 
             const courseListHTML = courses.map(course => `
-                <div class="course-item" onclick="location.href='class_detail.html?id=${course.id}'">
-                    <span class="course-name">${course.name}</span>
-                    <span class="course-status">수강중</span>
-                </div>
-            `).join('');
+        <div class="course-item" onclick="location.href='class_detail.html?id=${course.id}'">
+          <span class="course-name">${course.name}</span>
+          <span class="course-status">수강 중</span>
+        </div>
+      `).join('');
 
             activeCoursesCard.innerHTML = `
-                <h3 class="card-title">📖 수강 중인 강좌</h3>
-                <div class="course-list">
-                    ${courseListHTML}
-                </div>
-            `;
+        <h3 class="card-title">수강 중인 수업</h3>
+        <div class="course-list">
+          ${courseListHTML}
+        </div>
+      `;
         }
 
         function renderActivities(activities) {
@@ -352,13 +352,13 @@
 
             if (!activities || activities.length === 0) {
                 activityCard.innerHTML = `
-                    <h3 class="card-title">🎯 최근 활동</h3>
-                    <p class="card-content">최근 활동 내역이 없습니다.</p>
-                `;
+          <h3 class="card-title">학습 활동</h3>
+          <p class="card-content">학습 활동 내역이 아직 없습니다.</p>
+        `;
                 return;
             }
             // ... rendering logic ...
-            activityCard.innerHTML = `<h3 class="card-title">🎯 최근 활동</h3><p>기록 없음</p>`;
+            activityCard.innerHTML = `<h3>최근 활동</h3><p>기록이 없습니다.</p>`;
         }
 
         function updateLastUpdated() {

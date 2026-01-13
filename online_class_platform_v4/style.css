@@ -1,4 +1,4 @@
-﻿/* ============================
+/* ============================
    LessonBay UI (Stable v8)
    - 버튼/링크 클릭 안 되는 케이스(오버레이/포인터이벤트) 방지
    - 글자/여백 “꽉꽉” 방지(행간/패딩/최대폭/줄바꿈)
@@ -1159,4 +1159,17 @@ hr {
 [data-reveal] {
   opacity: 1 !important;
   transform: none !important;
+}
+/* Emergency Layout Patch */
+img {
+  max-width: 100% !important;
+  height: auto !important;
+  display: block;
+}
+.detail-img, .thumb, .class-card img {
+  max-width: 100% !important;
+  height: auto !important;
+}
+.container {
+  overflow-x: hidden !important;
 }

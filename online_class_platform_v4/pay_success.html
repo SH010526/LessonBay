@@ -1,90 +1,2 @@
 <!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="UTF-8" />
-  <title>결제 완료</title>
-  <style>
-    body { font-family: Arial, sans-serif; max-width: 560px; margin: 40px auto; padding: 20px; }
-    .card { border:1px solid #e5e7eb; border-radius:12px; padding:18px; box-shadow:0 6px 16px rgba(0,0,0,0.08); }
-    .muted { color:#6b7280; margin-top:8px; }
-    button { padding:10px 16px; border:none; border-radius:8px; background:#6d5efc; color:#fff; cursor:pointer; }
-    pre { background:#f4f4f5; padding:12px; border-radius:8px; font-size:13px; overflow:auto; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h2>결제 확인 중...</h2>
-    <div id="msg" class="muted">잠시만 기다려주세요.</div>
-    <pre id="log" style="display:none;"></pre>
-    <div style="margin-top:14px;">
-      <button id="goHome" style="display:none;">메인으로 이동</button>
-    </div>
-  </div>
-
-  <script>
-    (async function () {
-      const params = new URLSearchParams(location.search);
-      const paymentKey = params.get("paymentKey");
-      const orderId = params.get("orderId");
-      const amount = params.get("amount");
-      const classId = params.get("classId");
-      const returnUrl = params.get("returnUrl") || `http://127.0.0.1:5500/online_class_platform_v4/class_detail.html?id=${encodeURIComponent(classId || "")}`;
-
-      const msgEl = document.getElementById("msg");
-      const logEl = document.getElementById("log");
-      const goHome = document.getElementById("goHome");
-
-      function setLog(obj) {
-        logEl.style.display = "block";
-        logEl.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
-      }
-
-      if (!paymentKey || !orderId || !amount) {
-        msgEl.textContent = "필수 결제 정보가 없습니다.";
-        setLog({ paymentKey, orderId, amount });
-        goHome.style.display = "inline-block";
-        goHome.onclick = () => location.href = returnUrl;
-        return;
-      }
-
-      try {
-        const res = await fetch("http://localhost:3000/api/payments/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paymentKey, orderId, amount })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "결제 확인 실패");
-
-        // 수강 등록에 필요한 정보가 pending으로 저장되어 있으면 반영
-        try {
-          const pendingRaw = localStorage.getItem("lc_pending_enroll");
-          if (pendingRaw) {
-            const pending = JSON.parse(pendingRaw);
-            const { record, keys, classId: cid } = pending || {};
-            if (record && keys && cid) {
-              const enroll = JSON.parse(localStorage.getItem("lc_enrollments") || "{}");
-              keys.forEach(k => {
-                enroll[k] = enroll[k] || {};
-                enroll[k][cid] = record;
-              });
-              localStorage.setItem("lc_enrollments", JSON.stringify(enroll));
-            }
-            localStorage.removeItem("lc_pending_enroll");
-          }
-        } catch (_) {}
-
-        msgEl.textContent = "결제가 완료되었습니다. 수강 등록이 반영되었습니다.";
-        setLog(data);
-        goHome.style.display = "inline-block";
-        goHome.onclick = () => location.href = returnUrl;
-      } catch (e) {
-        msgEl.textContent = e.message || "결제 처리에 실패했습니다.";
-        setLog(e);
-        goHome.style.display = "inline-block";
-        goHome.onclick = () => location.href = returnUrl;
-      }
-    })();
-  </script>
-</body>
-</html>
+㰡䑏䍔奐䔠桴浬㸍਼桴浬⁬慮朽≫漢㸍਼桥慤㸍ਠ‼浥瑡⁣桡牳整㴢啔䘭㠢 㸍ਠ‼瑩瑬放냬ꂜ⃬馄谼⽴楴汥㸍ਠ‼獴祬放ഊ††扯摹⁻⁦潮琭晡浩汹㨠䅲楡氬⁳慮猭獥物昻⁭慸⵷楤瑨㨠㔶ば砻⁭慲杩渺‴ば砠慵瑯㬠灡摤楮机′ば砻⁽ഊ††⹣慲搠笠扯牤敲㨱灸⁳潬楤‣攵攷敢㬠扯牤敲⵲慤極猺ㄲ灸㬠灡摤楮机ㄸ灸㬠扯砭獨慤潷㨰‶灸‱㙰砠牧扡⠰ⰰⰰⰰ⸰㠩㬠納ਠ†‮浵瑥搠笠捯汯爺⌶户㈸〻⁭慲杩渭瑯瀺㡰砻⁽ഊ††扵瑴潮⁻⁰慤摩湧㨱ば砠ㄶ灸㬠扯牤敲㩮潮攻⁢潲摥爭牡摩畳㨸灸㬠扡捫杲潵湤㨣㙤㕥晣㬠捯汯爺⍦晦㬠捵牳潲㩰潩湴敲㬠納ਠ†⁰牥⁻⁢慣歧牯畮携⍦㑦㑦㔻⁰慤摩湧㨱㉰砻⁢潲摥爭牡摩畳㨸灸㬠景湴⵳楺攺ㄳ灸㬠潶敲晬潷㩡畴漻⁽ഊ†㰯獴祬放ഊ㰯桥慤㸍਼扯摹㸍ਠ‼摩瘠捬慳猽≣慲搢㸍ਠ†‼栲㻪늰鰠闬鶸⃬꒑⸮⸼⽨㈾ഊ††㱤楶⁩搽≭獧∠捬慳猽≭畴敤∾ꃬ讜谠냫认ꓬꎼ룬骔⸼⽤楶㸍ਠ†‼灲攠楤㴢汯朢⁳瑹汥㴢摩獰污示湯湥㬢㸼⽰牥㸍ਠ†‼摩瘠獴祬攽≭慲杩渭瑯瀺ㄴ灸㬢㸍ਠ††‼扵瑴潮⁩搽≧潈潭攢⁳瑹汥㴢摩獰污示湯湥㬢㻫ꦔ룬鲼鰠듫辙㰯扵瑴潮㸍ਠ†‼⽤楶㸍ਠ‼⽤楶㸍਍ਠ‼獣物灴㸍ਠ† 慳祮挠晵湣瑩潮 ⤠笍ਠ††⁣潮獴⁰慲慭猠㴠湥眠啒䱓敡牣桐慲慭猨汯捡瑩潮⹳敡牣栩㬍ਠ††⁣潮獴⁰慹浥湴䭥礠㴠灡牡浳⹧整⠢灡祭敮瑋敹∩㬍ਠ††⁣潮獴⁯牤敲䥤‽⁰慲慭献来琨≯牤敲䥤∩㬍ਠ††⁣潮獴⁡浯畮琠㴠灡牡浳⹧整⠢慭潵湴∩㬍ਠ††⁣潮獴⁣污獳䥤‽⁰慲慭献来琨≣污獳䥤∩㬍ਠ††⁣潮獴⁲整畲湕牬‽⁰慲慭献来琨≲整畲湕牬∩⁼簠恨瑴瀺⼯ㄲ㜮〮〮ㄺ㔵〰⽯湬楮敟捬慳獟灬慴景牭彶㐯捬慳獟摥瑡楬⹨瑭氿楤㴤筥湣潤敕剉䍯浰潮敮琨捬慳獉搠籼•∩絠㬍਍ਠ††⁣潮獴⁭獧䕬‽⁤潣畭敮琮来瑅汥浥湴䉹䥤⠢浳朢⤻ഊ†††捯湳琠汯杅氠㴠摯捵浥湴⹧整䕬敭敮瑂祉搨≬潧∩㬍ਠ††⁣潮獴⁧潈潭攠㴠摯捵浥湴⹧整䕬敭敮瑂祉搨≧潈潭攢⤻ഊഊ†††晵湣瑩潮⁳整䱯木潢権⁻ഊ††††汯杅氮獴祬攮摩獰污礠㴠≢汯捫∻ഊ††††汯杅氮瑥硴䍯湴敮琠㴠瑹灥潦⁯扪‽㴽•獴物湧∠㼠潢樠㨠䩓低⹳瑲楮杩晹⡯扪Ⱐ湵汬Ⱐ㈩㬍ਠ††⁽ഊഊ†††楦 ⅰ慹浥湴䭥礠籼‡潲摥牉搠籼‡慭潵湴⤠笍ਠ†††⁭獧䕬⹴數瑃潮瑥湴‽•蓬袘⃪늰鰠闫뎴耠蛬誵裫认⸢㬍ਠ†††⁳整䱯木笠灡祭敮瑋敹Ⱐ潲摥牉搬⁡浯畮琠紩㬍ਠ†††⁧潈潭攮獴祬攮摩獰污礠㴠≩湬楮攭扬潣欢㬍ਠ†††⁧潈潭攮潮捬楣欠㴠⠩‽㸠汯捡瑩潮⹨牥映㴠牥瑵牮啲氻ഊ††††牥瑵牮㬍ਠ††⁽ഊഊ†††瑲礠笍ਠ†††⁣潮獴⁲敳‽⁡睡楴⁦整捨⠢桴瑰㨯⽬潣慬桯獴㨳〰〯慰椯灡祭敮瑳⽣潮晩牭∬⁻ഊ†††††浥瑨潤㨠≐体吢Ⰽਠ††††⁨敡摥牳㨠笠≃潮瑥湴ⵔ祰攢㨠≡灰汩捡瑩潮⽪獯渢⁽Ⰽਠ††††⁢潤示⁊协丮獴物湧楦礨笠灡祭敮瑋敹Ⱐ潲摥牉搬⁡浯畮琠紩ഊ††††紩㬍ਠ†††⁣潮獴⁤慴愠㴠慷慩琠牥献橳潮⠩㬍ਠ†††⁩映⠡牥献潫⤠瑨牯眠湥眠䕲牯爨摡瑡⹥牲潲⁼簠⋪늰鰠闬鶸⃬认ꠢ⤻ഊഊ††††⼯⃬袘锠뇫ꆝ造蓬骔鰠闫뎴耠灥湤楮柬鲼鰠胬麥飬隴⃬麈볫ꦴ⃫나脍ਠ†††⁴特⁻ഊ†††††捯湳琠灥湤楮杒慷‽⁬潣慬却潲慧攮来瑉瑥洨≬损灥湤楮束敮牯汬∩㬍ਠ††††⁩映⡰敮摩湧剡眩⁻ഊ††††††捯湳琠灥湤楮朠㴠䩓低⹰慲獥⡰敮摩湧剡眩㬍ਠ†††††⁣潮獴⁻⁲散潲搬⁫敹猬⁣污獳䥤㨠捩搠素㴠灥湤楮朠籼⁻紻ഊ††††††楦 牥捯牤…☠步祳…☠捩搩⁻ഊ†††††††捯湳琠敮牯汬‽⁊协丮灡牳攨汯捡汓瑯牡来⹧整䥴敭⠢汣彥湲潬汭敮瑳∩⁼簠≻索⤻ഊ†††††††步祳⹦潲䕡捨⡫‽㸠笍ਠ†††††††⁥湲潬汛歝‽⁥湲潬汛歝⁼簠筽㬍ਠ†††††††⁥湲潬汛歝季楤崠㴠牥捯牤㬍ਠ††††††⁽⤻ഊ†††††††汯捡汓瑯牡来⹳整䥴敭⠢汣彥湲潬汭敮瑳∬⁊协丮獴物湧楦礨敮牯汬⤩㬍ਠ†††††⁽ഊ††††††汯捡汓瑯牡来⹲敭潶敉瑥洨≬损灥湤楮束敮牯汬∩㬍ਠ††††⁽ഊ††††素捡瑣栠⡟⤠筽ഊഊ††††浳杅氮瑥硴䍯湴敮琠㴠⋪늰鳪낀⃬馄賫邘裬誵裫认⸠飪낕⃫鎱鷬鶴⃫나臫邘裬誵裫认⸢㬍ਠ†††⁳整䱯木摡瑡⤻ഊ††††杯䡯浥⹳瑹汥⹤楳灬慹‽•楮汩湥ⵢ汯捫∻ഊ††††杯䡯浥⹯湣汩捫‽ ⤠㴾⁬潣慴楯渮桲敦‽⁲整畲湕牬㬍ਠ††⁽⁣慴捨 攩⁻ഊ††††浳杅氮瑥硴䍯湴敮琠㴠攮浥獳慧攠籼•냬ꂜ⃬늘곬鞐⃬认꣭隈뗫讈ꐮ∻ഊ††††獥瑌潧⡥⤻ഊ††††杯䡯浥⹳瑹汥⹤楳灬慹‽•楮汩湥ⵢ汯捫∻ഊ††††杯䡯浥⹯湣汩捫‽ ⤠㴾⁬潣慴楯渮桲敦‽⁲整畲湕牬㬍ਠ††⁽ഊ††紩⠩㬍ਠ‼⽳捲楰琾ഊ㰯扯摹㸍਼⽨瑭氾ഊ
