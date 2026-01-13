@@ -241,13 +241,12 @@ function chunkArray(list, size) {
   }
   return out;
 }
-
 async function deleteStorageObjects(values) {
   if (!Array.isArray(values) || !values.length) return;
   const byBucket = new Map();
   values.forEach((value) => {
     const parsed = parseSupabaseStorageRef(value);
-    if (!parsed?.bucket || !parsed?.path) return;
+    if (!parsed?.bucket || !parsed?.path) return;// 무시
     const bucket = String(parsed.bucket || STORAGE_BUCKET).trim();
     const path = String(parsed.path || "").replace(/^\/+/, "");
     if (!bucket || !path) return;
