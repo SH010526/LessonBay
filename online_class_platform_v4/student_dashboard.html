@@ -240,11 +240,11 @@
 
                 log("User found", user.id);
 
-                // Step 1: Get Enrollments
+                // Step 1: Get Enrollments (Usage of PascalCase 'Enrollment' and camelCase 'userId')
                 const { data: enrollments, error: enrollError } = await client
-                    .from('enrollments')
-                    .select('class_id')
-                    .eq('user_id', user.id);
+                    .from('Enrollment')
+                    .select('classId')
+                    .eq('userId', user.id);
 
                 if (enrollError) {
                     log("Enrollment Fetch Error", enrollError);
@@ -255,11 +255,11 @@
 
                 let courses = [];
                 if (enrollments && enrollments.length > 0) {
-                    const classIds = enrollments.map(e => e.class_id);
+                    const classIds = enrollments.map(e => e.classId);
 
-                    // Step 2: Get Classes
+                    // Step 2: Get Classes (Table 'Class')
                     const { data: classes, error: classError } = await client
-                        .from('classes')
+                        .from('Class')
                         .select('*')
                         .in('id', classIds);
 
@@ -268,9 +268,10 @@
                         // If error fetching classes, just show what we have or empty
                     } else {
                         log("Classes fetched", classes);
+                        // Mapping to local courses object
                         courses = classes.map(c => ({
                             id: c.id,
-                            name: c.title,
+                            name: c.title, // Assuming 'title' column exists. If Prisma, it might be 'title'.
                             progress: 0,
                             status: 'active'
                         }));
